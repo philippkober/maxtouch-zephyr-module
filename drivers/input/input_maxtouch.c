@@ -92,10 +92,16 @@ static void mxt_report_data(const struct device *dev) {
                 }
                 WRITE_BIT(pending_fingers, finger_idx, 1);
                 last_touch_status = (ev != UP);
-                input_report_abs(dev, INPUT_ABS_MT_SLOT, finger_idx, false, K_FOREVER);
-                input_report_abs(dev, INPUT_ABS_X, x_pos, false, K_FOREVER);
-                input_report_abs(dev, INPUT_ABS_Y, y_pos, false, K_FOREVER);
-                input_report_key(dev, INPUT_BTN_TOUCH, last_touch_status, false, K_FOREVER);
+                static int32_t last_x = -1, last_y = -1;
+                if (ev == DOWN) {
+                    last_x = x_pos; last_y = y_pos;
+                } else if (ev == MOVE && last_x >= 0) {
+                    input_report_rel(dev, INPUT_REL_X, x_pos - last_x, false, K_FOREVER);
+                    input_report_rel(dev, INPUT_REL_Y, y_pos - last_y, true, K_FOREVER);
+                    last_x = x_pos; last_y = y_pos;
+                } else if (ev == UP) {
+                    last_x = -1; last_y = -1;
+                }
                 break;
             default:
                 // All other events are ignored
