@@ -429,6 +429,13 @@ static int mxt_load_config(const struct device *dev,
         }
     }
 
+    // Config ins NVM speichern, erzwingt Reset+Kalibrierung mit neuen Settings
+    if (data->t6_command_processor_address) {
+        uint8_t backup = 0x55;
+        mxt_seq_write(dev, data->t6_command_processor_address + 2, &backup, 1);
+        k_sleep(K_MSEC(200));
+    }
+
     return 0;
 }
 
