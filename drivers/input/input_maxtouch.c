@@ -129,6 +129,12 @@ static void mxt_gpio_cb(const struct device *port, struct gpio_callback *cb, uin
     k_work_submit(&data->work);
 }
 
+static void mxt_poll_timer_cb(struct k_timer *timer)
+{
+    struct mxt_data *data = (struct mxt_data *)k_timer_user_data_get(timer);
+    k_work_submit(&data->work);
+}
+
 static int mxt_load_object_table(const struct device *dev, struct mxt_information_block *info) {
     struct mxt_data *data = dev->data;
     int ret = 0;
@@ -455,6 +461,11 @@ static int mxt_init(const struct device *dev) {
     }
 
     k_work_init(&data->work, mxt_work_cb);
+
+  static struct k_timer mxt_poll_timer;
+  k_timer_init(&mxt_poll_timer, mxt_poll_timer_cb, NULL);
+  k_timer_user_data_set(&mxt_poll_timer, data);
+  k_timer_start(&mxt_poll_timer, K_MSEC(200), K_MSEC(8));
 
     ret = gpio_pin_interrupt_configure_dt(&config->chg, GPIO_INT_LEVEL_ACTIVE);
     if (ret < 0) {
