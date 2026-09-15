@@ -395,13 +395,20 @@ static int mxt_load_config(const struct device *dev,
         t100_conf.scraux = 0x7;                       // AUX data: Report the number of touch events, touch area, anti touch area
         t100_conf.numtch = config->max_touch_points;  // The number of touch reports
                                                       // we want to receive (upto 10)
-        t100_conf.xsize = information->matrix_x_size; // Make configurable as this depends on the
-                                                      // sensor design.
-        t100_conf.ysize = information->matrix_y_size; // Make configurable as this depends on the
-                                                      // sensor design.
-                                                      //
-        t100_conf.xpitch = (config->sensor_width * 10 / information->matrix_x_size); // Pitch between X-Lines (0.1mm * XPitch).
-        t100_conf.ypitch = (config->sensor_height * 10 / information->matrix_y_size); // Pitch between Y-Lines (0.1mm * YPitch).
+        // Tatsaechlich belegte Leitungen des Sensor-PCBs; der Info-Block liefert nur das
+        // Maximum des Controllers (z.B. 14x24 beim mXT336UD, Procyon 42x50 nutzt 10x12).
+        uint8_t x_lines = config->x_lines ? config->x_lines : information->matrix_x_size;
+        uint8_t y_lines = config->y_lines ? config->y_lines : information->matrix_y_size;
+        x_lines = MIN(x_lines, information->matrix_x_size);
+        y_lines = MIN(y_lines, information->matrix_y_size);
+        t100_conf.xorigin = 0;
+        t100_conf.xsize = x_lines;
+        t100_conf.yorigin = 0;
+        t100_conf.ysize = y_lines;
+        t100_conf.xpitch = (config->sensor_width * 10 / x_lines);   // Pitch between X-Lines (0.1mm * XPitch).
+        t100_conf.ypitch = (config->sensor_height * 10 / y_lines);  // Pitch between Y-Lines (0.1mm * YPitch).
+        LOG_INF("T100 matrix %dx%d lines, pitch %d/%d (0.1mm)", x_lines, y_lines, t100_conf.xpitch,
+                t100_conf.ypitch);
         t100_conf.xedgecfg = 9;
         t100_conf.xedgedist = 10;
         t100_conf.yedgecfg = 9;
@@ -574,6 +581,8 @@ static int mxt_init(const struct device *dev) {
         .invert_y = DT_INST_PROP(n, invert_y),                                                          \
         .sensor_width = DT_INST_PROP(n, sensor_width),                                                  \
         .sensor_height = DT_INST_PROP(n, sensor_height),                                                \
+        .x_lines = DT_INST_PROP_OR(n, x_lines, 0),                                                  \
+        .y_lines = DT_INST_PROP_OR(n, y_lines, 0),                                                  \
         .touch_threshold = DT_INST_PROP_OR(n, touch_threshold, 18),                                     \
         .touch_hysteresis = DT_INST_PROP_OR(n, touch_hysteresis, 8),                                    \
         .internal_touch_threshold = DT_INST_PROP_OR(n, internal_touch_threshold, 10),                   \
