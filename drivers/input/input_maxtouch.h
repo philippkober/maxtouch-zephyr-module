@@ -9,6 +9,9 @@ struct mxt_data {
     const struct device *dev;
     struct gpio_callback gpio_cb;
     struct k_work work;
+    struct k_work_delayable init_work;
+    struct k_timer poll_timer;
+    uint32_t init_attempts;
 
     uint16_t t2_encryption_status_address;
     uint16_t t5_message_processor_address;

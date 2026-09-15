@@ -455,59 +455,80 @@ static int mxt_load_config(const struct device *dev,
     return 0;
 }
 
-static int mxt_init(const struct device *dev) {
-    struct mxt_data *data = dev->data;
-    const struct mxt_config *config = dev->config;
+#define MXT_INIT_RETRY_MS 500
+#define MXT_INIT_FIRST_DELAY_MS 500
 
+// Der maXTouch haengt am geschalteten VCC des nice!nano (ext-power) und braucht nach
+// Power-on einige hundert ms, bis er auf I2C antwortet. Deshalb wird die eigentliche
+// Initialisierung verzoegert und bei Fehlern wiederholt, statt im Device-Init zu scheitern.
+static void mxt_init_work_cb(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct mxt_data *data = CONTAINER_OF(dwork, struct mxt_data, init_work);
+    const struct device *dev = data->dev;
+    const struct mxt_config *config = dev->config;
     int ret;
 
-    data->dev = dev;
+    data->init_attempts++;
 
     if (!i2c_is_ready_dt(&config->bus)) {
-        LOG_ERR("i2c bus isn't ready!");
-        return -EIO;
-    };
-
-    LOG_INF("maxtouch init: i2c addr 0x%02x", config->bus.addr);
+        LOG_ERR("i2c bus isn't ready (attempt %u)", data->init_attempts);
+        k_work_schedule(dwork, K_MSEC(MXT_INIT_RETRY_MS));
+        return;
+    }
 
     struct mxt_information_block info = {0};
     ret = mxt_load_object_table(dev, &info);
-    if (ret < 0) {
-        LOG_ERR("Failed to load the ojbect table: %d", ret);
-        return -EIO;
+    if (ret < 0 || info.num_objects == 0 || info.num_objects == 0xFF) {
+        LOG_WRN("maxtouch not responding at 0x%02x (attempt %u, ret=%d, objects=%d), retry in %dms",
+                config->bus.addr, data->init_attempts, ret, info.num_objects, MXT_INIT_RETRY_MS);
+        k_work_schedule(dwork, K_MSEC(MXT_INIT_RETRY_MS));
+        return;
     }
-    LOG_INF("maxtouch found: family=%d variant=%d version=%d matrix=%dx%d objects=%d",
-            info.family_id, info.variant_id, info.version, info.matrix_x_size,
+
+    LOG_INF("maxtouch found after %u attempt(s): family=%d variant=%d version=%d matrix=%dx%d objects=%d",
+            data->init_attempts, info.family_id, info.variant_id, info.version, info.matrix_x_size,
             info.matrix_y_size, info.num_objects);
     LOG_INF("T5=0x%04x T6=0x%04x T44=0x%04x T100=0x%04x T100_first_rid=%d",
             data->t5_message_processor_address, data->t6_command_processor_address,
             data->t44_message_count_address, data->t100_multiple_touch_touchscreen_address,
             data->t100_first_report_id);
 
+    ret = mxt_load_config(dev, &info);
+    if (ret < 0) {
+        LOG_ERR("Failed to load default config: %d, retry in %dms", ret, MXT_INIT_RETRY_MS);
+        k_work_schedule(dwork, K_MSEC(MXT_INIT_RETRY_MS));
+        return;
+    }
+
+    // Load any existing messages to clear them
+    mxt_report_data(dev);
+
+    k_timer_start(&data->poll_timer, K_MSEC(8), K_MSEC(8));
+    LOG_INF("maxtouch config loaded, polling every 8ms");
+}
+
+static int mxt_init(const struct device *dev) {
+    struct mxt_data *data = dev->data;
+    const struct mxt_config *config = dev->config;
+    int ret;
+
+    data->dev = dev;
+
+    LOG_INF("maxtouch init: i2c addr 0x%02x, deferring probe by %dms", config->bus.addr,
+            MXT_INIT_FIRST_DELAY_MS);
+
     gpio_pin_configure_dt(&config->chg, GPIO_INPUT);
-
-    k_work_init(&data->work, mxt_work_cb);
-
-  static struct k_timer mxt_poll_timer;
-  k_timer_init(&mxt_poll_timer, mxt_poll_timer_cb, NULL);
-  k_timer_user_data_set(&mxt_poll_timer, data);
-  k_timer_start(&mxt_poll_timer, K_MSEC(200), K_MSEC(8));
-
     ret = gpio_pin_interrupt_configure_dt(&config->chg, GPIO_INT_DISABLE);
     if (ret < 0) {
         LOG_ERR("Failed to configure interrupt for CHG pin %d", ret);
-        return -EIO;
     }
 
-    ret = mxt_load_config(dev, &info);
-    if (ret < 0) {
-        LOG_ERR("Failed to load default config: %d", ret);
-        return -EIO;
-    }
-    LOG_INF("maxtouch config loaded, polling every 8ms");
+    k_work_init(&data->work, mxt_work_cb);
+    k_timer_init(&data->poll_timer, mxt_poll_timer_cb, NULL);
+    k_timer_user_data_set(&data->poll_timer, data);
 
-    // Load any existing messages to clear them, ensure our edge interrupt will fire
-    mxt_report_data(dev);
+    k_work_init_delayable(&data->init_work, mxt_init_work_cb);
+    k_work_schedule(&data->init_work, K_MSEC(MXT_INIT_FIRST_DELAY_MS));
 
     return 0;
 }
