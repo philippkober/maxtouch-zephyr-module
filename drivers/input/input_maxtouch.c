@@ -1,6 +1,7 @@
 #define DT_DRV_COMPAT microchip_maxtouch
 
 #include <zephyr/dt-bindings/input/input-event-codes.h>
+#include <stddef.h>
 #include <zephyr/init.h>
 #include <zephyr/input/input.h>
 #include <zephyr/sys/byteorder.h>
@@ -54,8 +55,14 @@ static void mxt_report_data(const struct device *dev) {
         return;
     }
 
-    uint8_t msg_count;
+    uint8_t msg_count = 0;
     ret = mxt_seq_read(dev, data->t44_message_count_address, &msg_count, 1);
+
+    // Diagnose: Heartbeat ca. alle 2s (bei 8ms Polling), zeigt dass Timer + I2C laufen
+    static uint32_t poll_count;
+    if ((++poll_count % 250) == 1) {
+        LOG_INF("poll #%u: T44 msg_count=%d (i2c ret=%d)", poll_count, msg_count, ret);
+    }
 
     if (ret < 0) {
         LOG_ERR("Failed to read message count: %d", ret);
@@ -72,6 +79,11 @@ static void mxt_report_data(const struct device *dev) {
             LOG_ERR("Failed to read message: %d", ret);
             return;
         }
+
+        // Diagnose: jede Message roh ausgeben (rid + Daten)
+        LOG_INF("msg rid=%d t100=%d data=%02x %02x %02x %02x %02x %02x", msg.report_id,
+                is_t100_report(dev, msg.report_id), msg.data[0], msg.data[1], msg.data[2],
+                msg.data[3], msg.data[4], msg.data[5]);
 
         if (is_t100_report(dev, msg.report_id)) {
             uint8_t finger_idx = msg.report_id - data->t100_first_report_id - 2;
@@ -93,6 +105,7 @@ static void mxt_report_data(const struct device *dev) {
                 WRITE_BIT(pending_fingers, finger_idx, 1);
                 last_touch_status = (ev != UP);
                 static int32_t last_x = -1, last_y = -1;
+                LOG_INF("touch finger=%d ev=%d x=%d y=%d", finger_idx, ev, x_pos, y_pos);
                 if (ev == DOWN) {
                     last_x = x_pos; last_y = y_pos;
                 } else if (ev == MOVE && last_x >= 0) {
@@ -429,10 +442,13 @@ static int mxt_load_config(const struct device *dev,
         }
     }
 
-    // Config ins NVM speichern, erzwingt Reset+Kalibrierung mit neuen Settings
+    // Kalibrierung anstossen: T6 CALIBRATE ist Offset 2 (Offset 3 waere REPORTALL)
     if (data->t6_command_processor_address) {
         uint8_t calibrate = 0x55;
-        mxt_seq_write(dev, data->t6_command_processor_address + 3, &calibrate, 1);
+        ret = mxt_seq_write(dev, data->t6_command_processor_address +
+                            offsetof(struct mxt_gen_commandprocessor_t6, calibrate),
+                            &calibrate, 1);
+        LOG_INF("T6 CALIBRATE sent (ret=%d)", ret);
         k_sleep(K_MSEC(200));
     }
 
@@ -452,12 +468,21 @@ static int mxt_init(const struct device *dev) {
         return -EIO;
     };
 
+    LOG_INF("maxtouch init: i2c addr 0x%02x", config->bus.addr);
+
     struct mxt_information_block info = {0};
     ret = mxt_load_object_table(dev, &info);
     if (ret < 0) {
         LOG_ERR("Failed to load the ojbect table: %d", ret);
         return -EIO;
     }
+    LOG_INF("maxtouch found: family=%d variant=%d version=%d matrix=%dx%d objects=%d",
+            info.family_id, info.variant_id, info.version, info.matrix_x_size,
+            info.matrix_y_size, info.num_objects);
+    LOG_INF("T5=0x%04x T6=0x%04x T44=0x%04x T100=0x%04x T100_first_rid=%d",
+            data->t5_message_processor_address, data->t6_command_processor_address,
+            data->t44_message_count_address, data->t100_multiple_touch_touchscreen_address,
+            data->t100_first_report_id);
 
     gpio_pin_configure_dt(&config->chg, GPIO_INPUT);
 
@@ -479,6 +504,7 @@ static int mxt_init(const struct device *dev) {
         LOG_ERR("Failed to load default config: %d", ret);
         return -EIO;
     }
+    LOG_INF("maxtouch config loaded, polling every 8ms");
 
     // Load any existing messages to clear them, ensure our edge interrupt will fire
     mxt_report_data(dev);
