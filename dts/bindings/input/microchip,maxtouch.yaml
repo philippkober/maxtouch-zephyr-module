@@ -39,6 +39,12 @@ properties:
     type: int
     description: The physical height of the sensor in millimeters.
     required: true
+  x-lines:
+    type: int
+    description: Number of X lines actually connected on the sensor PCB. Defaults to the controller's maximum matrix size from the info block.
+  y-lines:
+    type: int
+    description: Number of Y lines actually connected on the sensor PCB. Defaults to the controller's maximum matrix size from the info block.
   touch_threshold:
     type: int
     description: Touches must exceed this threshold before they generate an event. Higher thresolds are good for tracking smaller objects. Changes to the sensor surface, or the gain may require this value to be changed.
