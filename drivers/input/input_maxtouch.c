@@ -250,7 +250,7 @@ static int mxt_load_config(const struct device *dev,
         struct mxt_gen_acquisitionconfig_t8 t8_conf = {0};
         t8_conf.chrgtime = config->charge_time;
         t8_conf.tchautocal = 50;
-        t8_conf.atchcalst = 5;
+        t8_conf.atchcalst = 50;
 
         // Antitouch detection - reject palms etc..
         t8_conf.atchcalsthr = 35;
@@ -431,8 +431,8 @@ static int mxt_load_config(const struct device *dev,
 
     // Config ins NVM speichern, erzwingt Reset+Kalibrierung mit neuen Settings
     if (data->t6_command_processor_address) {
-        uint8_t backup = 0x55;
-        mxt_seq_write(dev, data->t6_command_processor_address + 2, &backup, 1);
+        uint8_t calibrate = 0x55;
+        mxt_seq_write(dev, data->t6_command_processor_address + 3, &calibrate, 1);
         k_sleep(K_MSEC(200));
     }
 
