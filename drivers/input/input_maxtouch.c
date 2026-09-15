@@ -460,12 +460,6 @@ static int mxt_init(const struct device *dev) {
     }
 
     gpio_pin_configure_dt(&config->chg, GPIO_INPUT);
-    gpio_init_callback(&data->gpio_cb, mxt_gpio_cb, BIT(config->chg.pin));
-    ret = gpio_add_callback(config->chg.port, &data->gpio_cb);
-    if (ret < 0) {
-        LOG_ERR("Failed to set DR callback: %d", ret);
-        return -EIO;
-    }
 
     k_work_init(&data->work, mxt_work_cb);
 
@@ -474,7 +468,7 @@ static int mxt_init(const struct device *dev) {
   k_timer_user_data_set(&mxt_poll_timer, data);
   k_timer_start(&mxt_poll_timer, K_MSEC(200), K_MSEC(8));
 
-    ret = gpio_pin_interrupt_configure_dt(&config->chg, GPIO_INT_LEVEL_ACTIVE);
+    ret = gpio_pin_interrupt_configure_dt(&config->chg, GPIO_INT_DISABLE);
     if (ret < 0) {
         LOG_ERR("Failed to configure interrupt for CHG pin %d", ret);
         return -EIO;
