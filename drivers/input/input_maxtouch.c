@@ -165,6 +165,9 @@ static int mxt_load_object_table(const struct device *dev, struct mxt_informatio
             info->family_id, info->variant_id, info->version, info->matrix_x_size,
             info->matrix_y_size, info->num_objects);
 
+    data->matrix_x_size = info->matrix_x_size;
+    data->matrix_y_size = info->matrix_y_size;
+
     uint8_t report_id = 1;
     uint16_t object_addr =
         sizeof(struct mxt_information_block); // Object table starts after the info block
@@ -401,6 +404,8 @@ static int mxt_load_config(const struct device *dev,
         uint8_t y_lines = config->y_lines ? config->y_lines : information->matrix_y_size;
         x_lines = MIN(x_lines, information->matrix_x_size);
         y_lines = MIN(y_lines, information->matrix_y_size);
+        data->x_lines_used = x_lines;
+        data->y_lines_used = y_lines;
         t100_conf.xorigin = 0;
         t100_conf.xsize = x_lines;
         t100_conf.yorigin = 0;
@@ -481,12 +486,111 @@ static int mxt_calibrate(const struct device *dev) {
                          &calibrate, 1);
 }
 
+#define MXT_DIAG_DELTAS 0x10
+#define MXT_DIAG_REFS 0x11
+#define MXT_DIAG_PAGE_UP 0x01
+#define MXT_T37_PAGE_BYTES 128
+#define MXT_DIAG_PERIOD_MS 3000
+#define MXT_MAX_NODES (14 * 24)
+
+static int16_t mxt_diag_nodes[MXT_MAX_NODES];
+
+static int mxt_t37_read_page(const struct device *dev, uint8_t mode, uint8_t page, uint8_t *buf) {
+    struct mxt_data *data = dev->data;
+    for (int i = 0; i < 25; i++) {
+        uint8_t hdr[2];
+        int ret = mxt_seq_read(dev, data->t37_diagnostic_debug_address, hdr, 2);
+        if (ret < 0) {
+            return ret;
+        }
+        if (hdr[0] == mode && hdr[1] == page) {
+            return mxt_seq_read(dev, data->t37_diagnostic_debug_address + 2, buf,
+                                MXT_T37_PAGE_BYTES);
+        }
+        k_msleep(2);
+    }
+    return -ETIMEDOUT;
+}
+
+// T37: Rohdaten aller Nodes (int16, X-major, Stride = matrix_y_size des Chips)
+static int mxt_diag_dump(const struct device *dev, uint8_t mode, const char *name, bool full) {
+    struct mxt_data *data = dev->data;
+    int ret;
+    if (!data->t37_diagnostic_debug_address || !data->t6_command_processor_address) {
+        return -ENODEV;
+    }
+    uint16_t total = data->matrix_x_size * data->matrix_y_size;
+    if (total > MXT_MAX_NODES) {
+        total = MXT_MAX_NODES;
+    }
+    uint8_t pages = (total * 2 + MXT_T37_PAGE_BYTES - 1) / MXT_T37_PAGE_BYTES;
+    uint8_t cmd = mode;
+    uint16_t t6_diag = data->t6_command_processor_address +
+                       offsetof(struct mxt_gen_commandprocessor_t6, diagnostic);
+
+    ret = mxt_seq_write(dev, t6_diag, &cmd, 1);
+    if (ret < 0) {
+        return ret;
+    }
+    for (uint8_t p = 0; p < pages; p++) {
+        uint8_t buf[MXT_T37_PAGE_BYTES];
+        ret = mxt_t37_read_page(dev, mode, p, buf);
+        if (ret < 0) {
+            LOG_WRN("T37 page %d read failed: %d", p, ret);
+            return ret;
+        }
+        for (int i = 0; i < MXT_T37_PAGE_BYTES / 2; i++) {
+            uint16_t idx = p * (MXT_T37_PAGE_BYTES / 2) + i;
+            if (idx < total) {
+                mxt_diag_nodes[idx] = (int16_t)(buf[2 * i] | (buf[2 * i + 1] << 8));
+            }
+        }
+        if (p + 1 < pages) {
+            cmd = MXT_DIAG_PAGE_UP;
+            ret = mxt_seq_write(dev, t6_diag, &cmd, 1);
+            if (ret < 0) {
+                return ret;
+            }
+        }
+    }
+
+    uint8_t xs = full ? data->matrix_x_size : data->x_lines_used;
+    uint8_t ys = full ? data->matrix_y_size : data->y_lines_used;
+    LOG_INF("%s dump (%dx%d of %dx%d):", name, xs, ys, data->matrix_x_size, data->matrix_y_size);
+    for (uint8_t x = 0; x < xs; x++) {
+        const int16_t *r = &mxt_diag_nodes[x * data->matrix_y_size];
+        // bis zu 12 Werte pro Zeile; Chip-Maximum 24 -> zwei Zeilen
+        for (uint8_t y0 = 0; y0 < ys; y0 += 12) {
+            int16_t v[12] = {0};
+            for (uint8_t k = 0; k < 12 && (y0 + k) < ys; k++) {
+                v[k] = r[y0 + k];
+            }
+            LOG_INF("X%02d Y%02d: %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d", x, y0, v[0],
+                    v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11]);
+        }
+    }
+    return 0;
+}
+
+static void mxt_diag_work_cb(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct mxt_data *data = CONTAINER_OF(dwork, struct mxt_data, diag_work);
+    mxt_diag_dump(data->dev, MXT_DIAG_DELTAS, "T37 deltas", false);
+    k_work_schedule(dwork, K_MSEC(MXT_DIAG_PERIOD_MS));
+}
+
 // Zweite Kalibrierung, wenn Stromversorgung, USB und BLE nach dem Boot ruhig sind.
 static void mxt_recal_work_cb(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
     struct mxt_data *data = CONTAINER_OF(dwork, struct mxt_data, recal_work);
+    const struct mxt_config *config = data->dev->config;
     int ret = mxt_calibrate(data->dev);
     LOG_INF("delayed T6 CALIBRATE sent (ret=%d)", ret);
+    if (config->diag_dump) {
+        k_msleep(300);
+        mxt_diag_dump(data->dev, MXT_DIAG_REFS, "T37 references", true);
+        k_work_schedule(&data->diag_work, K_MSEC(MXT_DIAG_PERIOD_MS));
+    }
 }
 
 // Der maXTouch haengt am geschalteten VCC des nice!nano (ext-power) und braucht nach
@@ -560,6 +664,7 @@ static int mxt_init(const struct device *dev) {
     k_timer_user_data_set(&data->poll_timer, data);
 
     k_work_init_delayable(&data->recal_work, mxt_recal_work_cb);
+    k_work_init_delayable(&data->diag_work, mxt_diag_work_cb);
     k_work_init_delayable(&data->init_work, mxt_init_work_cb);
     k_work_schedule(&data->init_work, K_MSEC(MXT_INIT_FIRST_DELAY_MS));
 
@@ -583,6 +688,7 @@ static int mxt_init(const struct device *dev) {
         .sensor_height = DT_INST_PROP(n, sensor_height),                                                \
         .x_lines = DT_INST_PROP_OR(n, x_lines, 0),                                                  \
         .y_lines = DT_INST_PROP_OR(n, y_lines, 0),                                                  \
+        .diag_dump = DT_INST_PROP(n, diag_dump),                                                    \
         .touch_threshold = DT_INST_PROP_OR(n, touch_threshold, 18),                                     \
         .touch_hysteresis = DT_INST_PROP_OR(n, touch_hysteresis, 8),                                    \
         .internal_touch_threshold = DT_INST_PROP_OR(n, internal_touch_threshold, 10),                   \

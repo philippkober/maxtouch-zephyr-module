@@ -80,3 +80,6 @@ properties:
     default: 20
   retransmission_compensation_disable:
     type: boolean
+  diag-dump:
+    type: boolean
+    description: Log T37 reference values once after init and delta values every 3s (diagnostics only).

@@ -11,6 +11,11 @@ struct mxt_data {
     struct k_work work;
     struct k_work_delayable init_work;
     struct k_work_delayable recal_work;
+    struct k_work_delayable diag_work;
+    uint8_t matrix_x_size;
+    uint8_t matrix_y_size;
+    uint8_t x_lines_used;
+    uint8_t y_lines_used;
     struct k_timer poll_timer;
     uint32_t init_attempts;
 
@@ -51,6 +56,7 @@ struct mxt_config {
     const uint16_t sensor_height;
     const uint8_t x_lines;
     const uint8_t y_lines;
+    const bool diag_dump;
     const uint8_t touch_threshold;
     const uint8_t touch_hysteresis;
     const uint8_t internal_touch_threshold;
