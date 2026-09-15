@@ -10,6 +10,7 @@ struct mxt_data {
     struct gpio_callback gpio_cb;
     struct k_work work;
     struct k_work_delayable init_work;
+    struct k_work_delayable recal_work;
     struct k_timer poll_timer;
     uint32_t init_attempts;
 

@@ -266,7 +266,7 @@ static int mxt_load_config(const struct device *dev,
         // dauerhaft als Anti-Touch in der Baseline (Werte wie im funktionierenden XIAO-Test)
         t8_conf.tchdrift = 5;
         t8_conf.driftst = 20;
-        t8_conf.tchautocal = 0;
+        t8_conf.tchautocal = 50; // Selbstheilung: Recal nach 10s Dauer-Touch (hat im Test geholfen)
         t8_conf.atchcalst = 5;
 
         // Antitouch detection - reject palms etc..
@@ -461,6 +461,26 @@ static int mxt_load_config(const struct device *dev,
 
 #define MXT_INIT_RETRY_MS 500
 #define MXT_INIT_FIRST_DELAY_MS 500
+#define MXT_RECAL_DELAY_MS 3000
+
+static int mxt_calibrate(const struct device *dev) {
+    struct mxt_data *data = dev->data;
+    uint8_t calibrate = 0x55;
+    if (!data->t6_command_processor_address) {
+        return -ENODEV;
+    }
+    return mxt_seq_write(dev, data->t6_command_processor_address +
+                         offsetof(struct mxt_gen_commandprocessor_t6, calibrate),
+                         &calibrate, 1);
+}
+
+// Zweite Kalibrierung, wenn Stromversorgung, USB und BLE nach dem Boot ruhig sind.
+static void mxt_recal_work_cb(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct mxt_data *data = CONTAINER_OF(dwork, struct mxt_data, recal_work);
+    int ret = mxt_calibrate(data->dev);
+    LOG_INF("delayed T6 CALIBRATE sent (ret=%d)", ret);
+}
 
 // Der maXTouch haengt am geschalteten VCC des nice!nano (ext-power) und braucht nach
 // Power-on einige hundert ms, bis er auf I2C antwortet. Deshalb wird die eigentliche
@@ -509,6 +529,7 @@ static void mxt_init_work_cb(struct k_work *work) {
 
     k_timer_start(&data->poll_timer, K_MSEC(8), K_MSEC(8));
     LOG_INF("maxtouch config loaded, polling every 8ms");
+    k_work_schedule(&data->recal_work, K_MSEC(MXT_RECAL_DELAY_MS));
 }
 
 static int mxt_init(const struct device *dev) {
@@ -531,6 +552,7 @@ static int mxt_init(const struct device *dev) {
     k_timer_init(&data->poll_timer, mxt_poll_timer_cb, NULL);
     k_timer_user_data_set(&data->poll_timer, data);
 
+    k_work_init_delayable(&data->recal_work, mxt_recal_work_cb);
     k_work_init_delayable(&data->init_work, mxt_init_work_cb);
     k_work_schedule(&data->init_work, K_MSEC(MXT_INIT_FIRST_DELAY_MS));
 
