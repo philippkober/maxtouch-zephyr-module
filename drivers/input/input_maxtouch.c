@@ -456,7 +456,7 @@ static int mxt_init(const struct device *dev) {
 
     k_work_init(&data->work, mxt_work_cb);
 
-    ret = gpio_pin_interrupt_configure_dt(&config->chg, GPIO_INT_EDGE_TO_ACTIVE);
+    ret = gpio_pin_interrupt_configure_dt(&config->chg, GPIO_INT_LEVEL_ACTIVE);
     if (ret < 0) {
         LOG_ERR("Failed to configure interrupt for CHG pin %d", ret);
         return -EIO;
