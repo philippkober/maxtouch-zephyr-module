@@ -262,8 +262,12 @@ static int mxt_load_config(const struct device *dev,
     if (data->t8_acquisitionconfig_address) {
         struct mxt_gen_acquisitionconfig_t8 t8_conf = {0};
         t8_conf.chrgtime = config->charge_time;
-        t8_conf.tchautocal = 50;
-        t8_conf.atchcalst = 50;
+        // Drift-Kompensation an, sonst bleibt eine Kalibrierung mit Finger in der Naehe
+        // dauerhaft als Anti-Touch in der Baseline (Werte wie im funktionierenden XIAO-Test)
+        t8_conf.tchdrift = 5;
+        t8_conf.driftst = 20;
+        t8_conf.tchautocal = 0;
+        t8_conf.atchcalst = 5;
 
         // Antitouch detection - reject palms etc..
         t8_conf.atchcalsthr = 35;
