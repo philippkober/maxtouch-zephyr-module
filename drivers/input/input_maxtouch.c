@@ -278,13 +278,15 @@ static int mxt_load_config(const struct device *dev,
         // keine Touches mehr (T37-Deltas zeigen den Finger trotzdem).
         t8_conf.tchdrift = 5;
         t8_conf.driftst = 20;
-        t8_conf.tchautocal = 50;
+        t8_conf.tchautocal = 0;   // keine Recal nach 10s Dauer-Touch (erzeugt Geisterbilder)
         t8_conf.atchcalst = 5;
 
-        // Antitouch detection - reject palms etc..
-        t8_conf.atchcalsthr = 35;
-        t8_conf.atchfrccalthr = 50;
-        t8_conf.atchfrccalratio = 25;
+        // Anti-Touch-Pruefung nur im 1s-Fenster nach der Kalibrierung. Forced Calibration
+        // (atchfrccalthr/ratio) aus: die negativen Randnodes eines echten Fingers loesten
+        // sonst Recal-Loops mit Finger auf dem Pad aus (4x CAL in 300ms im Log).
+        t8_conf.atchcalsthr = 50;
+        t8_conf.atchfrccalthr = 0;
+        t8_conf.atchfrccalratio = 0;
         t8_conf.measallow = config->allowed_measurement_types;
 
         ret = mxt_seq_write(dev, data->t8_acquisitionconfig_address, &t8_conf, sizeof(t8_conf));
