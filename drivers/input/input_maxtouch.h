@@ -5,8 +5,25 @@
 #include <zephyr/drivers/i2c.h>
 #include <zephyr/drivers/gpio.h>
 
+#define MXT_MAX_FINGERS 5
+
+struct mxt_finger {
+    bool active;
+    int16_t x, y;
+    int16_t down_x, down_y;
+};
+
 struct mxt_data {
     const struct device *dev;
+    // Gesten: Tap = Linksklick, 2-Finger-Tap = Rechtsklick, 2 Finger ziehen = Scrollen
+    struct mxt_finger fingers[MXT_MAX_FINGERS];
+    uint8_t active_mask;
+    uint8_t gesture_max_fingers;
+    uint32_t gesture_start_ms;
+    bool gesture_moved;
+    int16_t scroll_acc_x, scroll_acc_y;
+    struct k_work_delayable click_release_work;
+    uint16_t click_button;
     struct gpio_callback gpio_cb;
     struct k_work work;
     struct k_work_delayable init_work;

@@ -47,6 +47,113 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
             report_id < data->t100_first_report_id + 2 + config->max_touch_points);
 }
 
+// --- Gesten / Mausemulation --------------------------------------------------------------
+#define MXT_TAP_MAX_MS 250      // Tap: DOWN..UP kuerzer als das
+#define MXT_TAP_MAX_MOVE 30     // Tap: Bewegung kleiner als das (Counts, ~1.7 mm)
+#define MXT_SCROLL_DIV 20       // Counts pro Scroll-Schritt bei 2-Finger-Ziehen
+#define MXT_CLICK_RELEASE_MS 30
+
+static inline int16_t mxt_abs16(int16_t v) { return v < 0 ? -v : v; }
+
+static void mxt_click_release_cb(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct mxt_data *data = CONTAINER_OF(dwork, struct mxt_data, click_release_work);
+    input_report_key(data->dev, data->click_button, 0, true, K_NO_WAIT);
+}
+
+static void mxt_click(const struct device *dev, uint16_t code) {
+    struct mxt_data *data = dev->data;
+    LOG_INF("gesture: click button %s", code == INPUT_BTN_0 ? "left" : "right");
+    data->click_button = code;
+    input_report_key(dev, code, 1, true, K_NO_WAIT);
+    k_work_schedule(&data->click_release_work, K_MSEC(MXT_CLICK_RELEASE_MS));
+}
+
+static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_touch_event ev,
+                              uint16_t x_pos, uint16_t y_pos) {
+    struct mxt_data *data = dev->data;
+    if (idx >= MXT_MAX_FINGERS) {
+        return;
+    }
+    struct mxt_finger *f = &data->fingers[idx];
+    int16_t x = (int16_t)x_pos, y = (int16_t)y_pos;
+    uint32_t now = k_uptime_get_32();
+
+    if (ev == MOVE && !f->active) {
+        ev = DOWN; // DOWN verpasst (z.B. waehrend Init): ab hier tracken
+    }
+
+    switch (ev) {
+    case DOWN: {
+        bool first = (data->active_mask == 0);
+        f->active = true;
+        f->x = f->down_x = x;
+        f->y = f->down_y = y;
+        data->active_mask |= BIT(idx);
+        if (first) {
+            data->gesture_start_ms = now;
+            data->gesture_max_fingers = 0;
+            data->gesture_moved = false;
+            data->scroll_acc_x = data->scroll_acc_y = 0;
+        }
+        uint8_t n = __builtin_popcount(data->active_mask);
+        if (n > data->gesture_max_fingers) {
+            data->gesture_max_fingers = n;
+        }
+        break;
+    }
+    case MOVE: {
+        int16_t dx = x - f->x, dy = y - f->y;
+        f->x = x;
+        f->y = y;
+        if (mxt_abs16(x - f->down_x) > MXT_TAP_MAX_MOVE ||
+            mxt_abs16(y - f->down_y) > MXT_TAP_MAX_MOVE) {
+            data->gesture_moved = true;
+        }
+        uint8_t n = __builtin_popcount(data->active_mask);
+        uint8_t lowest = __builtin_ctz(data->active_mask);
+        if (n == 1) {
+            if (dx != 0 || dy != 0) {
+                input_report_rel(dev, INPUT_REL_X, dx, false, K_NO_WAIT);
+                input_report_rel(dev, INPUT_REL_Y, dy, true, K_NO_WAIT);
+            }
+        } else if (n >= 2 && idx == lowest) {
+            // Zwei Finger: Bewegung des ersten Fingers wird zu Scroll-Schritten
+            data->scroll_acc_y += dy;
+            data->scroll_acc_x += dx;
+            int16_t vs = data->scroll_acc_y / MXT_SCROLL_DIV;
+            int16_t hs = data->scroll_acc_x / MXT_SCROLL_DIV;
+            if (vs != 0) {
+                data->scroll_acc_y -= vs * MXT_SCROLL_DIV;
+                input_report_rel(dev, INPUT_REL_WHEEL, vs, hs == 0, K_NO_WAIT);
+            }
+            if (hs != 0) {
+                data->scroll_acc_x -= hs * MXT_SCROLL_DIV;
+                input_report_rel(dev, INPUT_REL_HWHEEL, hs, true, K_NO_WAIT);
+            }
+        }
+        break;
+    }
+    case UP: {
+        f->active = false;
+        data->active_mask &= ~BIT(idx);
+        if (data->active_mask == 0) {
+            uint32_t dur = now - data->gesture_start_ms;
+            if (!data->gesture_moved && dur <= MXT_TAP_MAX_MS) {
+                if (data->gesture_max_fingers == 1) {
+                    mxt_click(dev, INPUT_BTN_0);
+                } else if (data->gesture_max_fingers == 2) {
+                    mxt_click(dev, INPUT_BTN_1);
+                }
+            }
+        }
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 static void mxt_report_data(const struct device *dev) {
     const struct mxt_config *config = dev->config;
     struct mxt_data *data = dev->data;
@@ -105,17 +212,8 @@ static void mxt_report_data(const struct device *dev) {
                 }
                 WRITE_BIT(pending_fingers, finger_idx, 1);
                 last_touch_status = (ev != UP);
-                static int32_t last_x = -1, last_y = -1;
                 LOG_INF("touch finger=%d ev=%d x=%d y=%d", finger_idx, ev, x_pos, y_pos);
-                if (ev == DOWN) {
-                    last_x = x_pos; last_y = y_pos;
-                } else if (ev == MOVE && last_x >= 0) {
-                    input_report_rel(dev, INPUT_REL_X, x_pos - last_x, false, K_FOREVER);
-                    input_report_rel(dev, INPUT_REL_Y, y_pos - last_y, true, K_FOREVER);
-                    last_x = x_pos; last_y = y_pos;
-                } else if (ev == UP) {
-                    last_x = -1; last_y = -1;
-                }
+                mxt_process_touch(dev, finger_idx, ev, x_pos, y_pos);
                 break;
             default:
                 // All other events are ignored
@@ -680,6 +778,7 @@ static int mxt_init(const struct device *dev) {
     k_timer_init(&data->poll_timer, mxt_poll_timer_cb, NULL);
     k_timer_user_data_set(&data->poll_timer, data);
 
+    k_work_init_delayable(&data->click_release_work, mxt_click_release_cb);
     k_work_init_delayable(&data->recal_work, mxt_recal_work_cb);
     k_work_init_delayable(&data->diag_work, mxt_diag_work_cb);
     k_work_init_delayable(&data->init_work, mxt_init_work_cb);
