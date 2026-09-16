@@ -273,14 +273,16 @@ static int mxt_load_config(const struct device *dev,
         LOG_HEXDUMP_INF(&t8_conf, sizeof(t8_conf), "T8 before");
         memset(&t8_conf, 0, sizeof(t8_conf));
         t8_conf.chrgtime = config->charge_time;
-        // Upstream-Werte des Modul-Autors (letzter Stand, der Touch-Messages lieferte)
-        t8_conf.tchdrift = 0;
-        t8_conf.driftst = 0;
+        // Werte des Builds, der Touch-Messages lieferte. Mit atchcalst=0 (Upstream) bleibt
+        // der Chip nach jeder Kalibrierung unbegrenzt in der Anti-Touch-Pruefung und meldet
+        // keine Touches mehr (T37-Deltas zeigen den Finger trotzdem).
+        t8_conf.tchdrift = 5;
+        t8_conf.driftst = 20;
         t8_conf.tchautocal = 50;
-        t8_conf.atchcalst = 0;
+        t8_conf.atchcalst = 5;
 
         // Antitouch detection - reject palms etc..
-        t8_conf.atchcalsthr = 50;
+        t8_conf.atchcalsthr = 35;
         t8_conf.atchfrccalthr = 50;
         t8_conf.atchfrccalratio = 25;
         t8_conf.measallow = config->allowed_measurement_types;
