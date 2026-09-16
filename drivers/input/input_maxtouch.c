@@ -2,6 +2,7 @@
 
 #include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <stddef.h>
+#include <string.h>
 #include <zephyr/init.h>
 #include <zephyr/input/input.h>
 #include <zephyr/sys/byteorder.h>
@@ -182,6 +183,10 @@ static int mxt_load_object_table(const struct device *dev, struct mxt_informatio
 
         uint16_t addr = sys_le16_to_cpu(obj_table.position);
 
+        LOG_INF("obj T%-3d addr=0x%04x size=%-3d inst=%d rids=%d first_rid=%d", obj_table.type, addr,
+                obj_table.size_minus_one + 1, obj_table.instances_minus_one + 1,
+                obj_table.report_ids_per_instance, report_id);
+
         switch (obj_table.type) {
         case 2:
             data->t2_encryption_status_address = addr;
@@ -264,16 +269,18 @@ static int mxt_load_config(const struct device *dev,
 
     if (data->t8_acquisitionconfig_address) {
         struct mxt_gen_acquisitionconfig_t8 t8_conf = {0};
+        ret = mxt_seq_read(dev, data->t8_acquisitionconfig_address, &t8_conf, sizeof(t8_conf));
+        LOG_HEXDUMP_INF(&t8_conf, sizeof(t8_conf), "T8 before");
+        memset(&t8_conf, 0, sizeof(t8_conf));
         t8_conf.chrgtime = config->charge_time;
-        // Drift-Kompensation an, sonst bleibt eine Kalibrierung mit Finger in der Naehe
-        // dauerhaft als Anti-Touch in der Baseline (Werte wie im funktionierenden XIAO-Test)
-        t8_conf.tchdrift = 5;
-        t8_conf.driftst = 20;
-        t8_conf.tchautocal = 50; // Selbstheilung: Recal nach 10s Dauer-Touch (hat im Test geholfen)
-        t8_conf.atchcalst = 5;
+        // Upstream-Werte des Modul-Autors (letzter Stand, der Touch-Messages lieferte)
+        t8_conf.tchdrift = 0;
+        t8_conf.driftst = 0;
+        t8_conf.tchautocal = 50;
+        t8_conf.atchcalst = 0;
 
         // Antitouch detection - reject palms etc..
-        t8_conf.atchcalsthr = 35;
+        t8_conf.atchcalsthr = 50;
         t8_conf.atchfrccalthr = 50;
         t8_conf.atchfrccalratio = 25;
         t8_conf.measallow = config->allowed_measurement_types;
@@ -283,6 +290,8 @@ static int mxt_load_config(const struct device *dev,
             LOG_ERR("Failed to set T8 config: %d", ret);
             return ret;
         }
+        ret = mxt_seq_read(dev, data->t8_acquisitionconfig_address, &t8_conf, sizeof(t8_conf));
+        LOG_HEXDUMP_INF(&t8_conf, sizeof(t8_conf), "T8 after");
     }
 
 #ifdef MXT_ENABLE_STYLUS
@@ -370,6 +379,7 @@ static int mxt_load_config(const struct device *dev,
             LOG_ERR("Failed to load the initial T100 config: %d", ret);
             return ret;
         }
+        LOG_HEXDUMP_INF(&t100_conf, sizeof(t100_conf), "T100 before");
 
         t100_conf.ctrl =
             MXT_T100_CTRL_RPTEN | MXT_T100_CTRL_ENABLE | MXT_T100_CTRL_SCANEN;  // Enable the t100 object, and enable
@@ -456,6 +466,9 @@ static int mxt_load_config(const struct device *dev,
             LOG_ERR("Failed to set T100 config: %d", ret);
             return ret;
         }
+        ret = mxt_seq_read(dev, data->t100_multiple_touch_touchscreen_address, &t100_conf,
+                           sizeof(t100_conf));
+        LOG_HEXDUMP_INF(&t100_conf, sizeof(t100_conf), "T100 after");
     }
 
     // Kalibrierung anstossen: T6 CALIBRATE ist Offset 2 (Offset 3 waere REPORTALL)
