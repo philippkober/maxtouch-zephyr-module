@@ -276,7 +276,7 @@ static int mxt_load_config(const struct device *dev,
         // Werte des Builds, der Touch-Messages lieferte. Mit atchcalst=0 (Upstream) bleibt
         // der Chip nach jeder Kalibrierung unbegrenzt in der Anti-Touch-Pruefung und meldet
         // keine Touches mehr (T37-Deltas zeigen den Finger trotzdem).
-        t8_conf.tchdrift = 5;
+        t8_conf.tchdrift = 20;  // 4s: mit 5 wurde ein ruhender Finger binnen 1s in die Baseline gezogen
         t8_conf.driftst = 20;
         t8_conf.tchautocal = 0;   // keine Recal nach 10s Dauer-Touch (erzeugt Geisterbilder)
         t8_conf.atchcalst = 5;
