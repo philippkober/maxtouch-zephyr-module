@@ -11,6 +11,7 @@ struct mxt_finger {
     bool active;
     int16_t x, y;
     int16_t down_x, down_y;
+    bool merged;        // Kontaktflaeche so gross, dass es zwei verschmolzene Finger sind
 };
 
 struct mxt_data {
@@ -25,6 +26,7 @@ struct mxt_data {
     int16_t cursor_acc_x, cursor_acc_y; // Bewegung zu Gestenbeginn, bis klar ist ob 1 oder 2 Finger
     struct k_work_delayable click_release_work;
     uint16_t click_button;
+    bool ready;         // Chip konfiguriert, alte Meldungen verworfen: erst dann Gesten auswerten
     bool button_held;   // Taste gedrueckt (Tap-Release ausstehend oder Drag laeuft)
     bool dragging;      // Tap-and-Drag aktiv
     struct gpio_callback gpio_cb;

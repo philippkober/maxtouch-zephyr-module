@@ -52,6 +52,9 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_TAP2_MAX_MS 400     // Zwei-Finger-Tap: Finger landen/heben nicht gleichzeitig
 #define MXT_TAP_MAX_MOVE 30     // Tap: Bewegung kleiner als das (Counts, ~1.7 mm)
 #define MXT_TAP2_MAX_MOVE 60    // Zwei-Finger-Tap: Schwerpunkt springt beim Aufsetzen staerker
+#define MXT_MERGED_AREA 14      // Flaeche ab der ein Touch als zwei verschmolzene Finger gilt
+                                // (Log: 1 Finger 7-9, 2 getrennte je 6-12, verschmolzen 14-18)
+#define MXT_JUMP_LIMIT 60       // groessere Spruenge pro Messung = Trennen/Verschmelzen, verwerfen
 #define MXT_MULTI_WAIT_MS 120   // so lange Cursorbewegung puffern, ob noch ein zweiter Finger kommt
 #define MXT_SCROLL_DIV 20       // Counts pro Scroll-Schritt bei 2-Finger-Ziehen
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
@@ -83,11 +86,12 @@ static void mxt_click(const struct device *dev, uint16_t code) {
 }
 
 static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_touch_event ev,
-                              uint16_t x_pos, uint16_t y_pos) {
+                              uint16_t x_pos, uint16_t y_pos, uint8_t area) {
     struct mxt_data *data = dev->data;
-    if (idx >= MXT_MAX_FINGERS) {
+    if (idx >= MXT_MAX_FINGERS || !data->ready) {
         return;
     }
+    bool merged = area >= MXT_MERGED_AREA;
     struct mxt_finger *f = &data->fingers[idx];
     int16_t x = (int16_t)x_pos, y = (int16_t)y_pos;
     uint32_t now = k_uptime_get_32();
@@ -102,6 +106,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         f->active = true;
         f->x = f->down_x = x;
         f->y = f->down_y = y;
+        f->merged = merged;
         data->active_mask |= BIT(idx);
         if (first) {
             data->gesture_start_ms = now;
@@ -116,7 +121,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 LOG_INF("gesture: drag start");
             }
         }
-        uint8_t n = __builtin_popcount(data->active_mask);
+        uint8_t n = __builtin_popcount(data->active_mask) + (merged ? 1 : 0);
         if (n > data->gesture_max_fingers) {
             data->gesture_max_fingers = n;
         }
@@ -126,6 +131,16 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         int16_t dx = x - f->x, dy = y - f->y;
         f->x = x;
         f->y = y;
+        bool merge_changed = (merged != f->merged);
+        f->merged = merged;
+        if (merged && data->gesture_max_fingers < 2) {
+            data->gesture_max_fingers = 2; // verschmolzene Finger: Scroll-Geste, kein Cursor
+        }
+        if (merge_changed || mxt_abs16(dx) > MXT_JUMP_LIMIT || mxt_abs16(dy) > MXT_JUMP_LIMIT) {
+            // Position springt beim Trennen/Verschmelzen: diese Messung nicht verwenden
+            dx = 0;
+            dy = 0;
+        }
         uint8_t n = __builtin_popcount(data->active_mask);
         uint8_t lowest = __builtin_ctz(data->active_mask);
         int16_t tap_move = data->gesture_max_fingers >= 2 ? MXT_TAP2_MAX_MOVE : MXT_TAP_MAX_MOVE;
@@ -143,8 +158,9 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 input_report_rel(dev, INPUT_REL_Y, data->cursor_acc_y, true, K_NO_WAIT);
                 data->cursor_acc_x = data->cursor_acc_y = 0;
             }
-        } else if (n >= 2 && idx == lowest) {
-            // Zwei Finger: Bewegung des ersten Fingers wird zu Scroll-Schritten
+        } else if (idx == lowest && (n >= 2 || merged)) {
+            // Zwei Finger (getrennt oder verschmolzen): Bewegung des ersten Fingers wird zu
+            // Scroll-Schritten
             data->scroll_acc_y += dy;
             data->scroll_acc_x += dx;
             int16_t vs = data->scroll_acc_y / MXT_SCROLL_DIV;
@@ -253,24 +269,24 @@ static void mxt_report_data(const struct device *dev) {
             // unterdrueckte Finger als SUP/DOWNSUP/UNSUPUP.
             switch (ev) {
             case DOWNUP:
-                mxt_process_touch(dev, finger_idx, DOWN, x_pos, y_pos);
-                mxt_process_touch(dev, finger_idx, UP, x_pos, y_pos);
+                mxt_process_touch(dev, finger_idx, DOWN, x_pos, y_pos, area);
+                mxt_process_touch(dev, finger_idx, UP, x_pos, y_pos, area);
                 break;
             case UNSUPUP:
                 // ausgeblendeter Finger wurde tatsaechlich abgehoben
-                mxt_process_touch(dev, finger_idx, UP, x_pos, y_pos);
+                mxt_process_touch(dev, finger_idx, UP, x_pos, y_pos, area);
                 break;
             case SUP:
             case DOWNSUP:
                 // Finger liegt noch, wird aber ausgeblendet: Zustand beibehalten
                 break;
             case UNSUP:
-                mxt_process_touch(dev, finger_idx, MOVE, x_pos, y_pos);
+                mxt_process_touch(dev, finger_idx, MOVE, x_pos, y_pos, area);
                 break;
             case DOWN:
             case MOVE:
             case UP:
-                mxt_process_touch(dev, finger_idx, ev, x_pos, y_pos);
+                mxt_process_touch(dev, finger_idx, ev, x_pos, y_pos, area);
                 break;
             default:
                 break;
@@ -807,8 +823,9 @@ static void mxt_init_work_cb(struct k_work *work) {
         return;
     }
 
-    // Load any existing messages to clear them
+    // Load any existing messages to clear them (ohne Gestenauswertung)
     mxt_report_data(dev);
+    data->ready = true;
 
     k_timer_start(&data->poll_timer, K_MSEC(8), K_MSEC(8));
     LOG_INF("maxtouch config loaded, polling every 8ms");
