@@ -53,6 +53,7 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_TAP_MAX_MOVE 30     // Tap: Bewegung kleiner als das (Counts, ~1.7 mm)
 #define MXT_TAP2_MAX_MOVE 60    // Zwei-Finger-Tap: Schwerpunkt springt beim Aufsetzen staerker
 #define MXT_MULTI_WAIT_MS 60    // so lange Cursorbewegung puffern, ob noch ein zweiter Finger kommt
+#define MXT_SETTLE_MS 40        // nach Wechsel der Fingerzahl springt die Position: so lange nicht scrollen
 #define MXT_SCROLL_DIV 20       // Counts pro Scroll-Schritt bei 2-Finger-Ziehen
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
@@ -120,6 +121,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         if (n > data->gesture_max_fingers) {
             data->gesture_max_fingers = n;
         }
+        data->count_change_ms = now;
         break;
     }
     case MOVE: {
@@ -143,8 +145,13 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 input_report_rel(dev, INPUT_REL_Y, data->cursor_acc_y, true, K_NO_WAIT);
                 data->cursor_acc_x = data->cursor_acc_y = 0;
             }
-        } else if (n >= 2 && idx == lowest) {
-            // Zwei Finger: Bewegung des ersten Fingers wird zu Scroll-Schritten
+        } else if (data->gesture_max_fingers >= 2 && n >= 1 && idx == lowest) {
+            // Mehrfinger-Geste (bleibt es bis zum vollstaendigen Abheben, auch wenn der Chip
+            // zwischendurch einen Finger ausblendet): Bewegung des ersten aktiven Fingers
+            // wird zu Scroll-Schritten. Direkt nach einem Fingerwechsel springt die Position.
+            if (now - data->count_change_ms < MXT_SETTLE_MS) {
+                break;
+            }
             data->scroll_acc_y += dy;
             data->scroll_acc_x += dx;
             int16_t vs = data->scroll_acc_y / MXT_SCROLL_DIV;
@@ -169,6 +176,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         }
         f->active = false;
         data->active_mask &= ~BIT(idx);
+        data->count_change_ms = now;
         if (data->active_mask == 0) {
             uint32_t dur = now - data->gesture_start_ms;
             if (data->dragging) {
