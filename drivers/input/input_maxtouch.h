@@ -91,6 +91,7 @@ struct mxt_config {
     const uint8_t move_hyst_initial;
     const uint8_t move_hyst_next;
     const uint8_t confthr;
+    const uint8_t move_smooth;
     const bool shieldless_enable;
     const bool diag_dump;
     const uint8_t touch_threshold;

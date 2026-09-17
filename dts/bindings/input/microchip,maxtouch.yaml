@@ -104,3 +104,7 @@ properties:
   shieldless-enable:
     type: boolean
     description: Enable the T56 shieldless noise suppression (used by the author for Procyon boards).
+  move-smooth:
+    type: int
+    default: 0
+    description: T100 MOVSMOOTH, smoothing applied to slow movements (tails off at higher speeds).

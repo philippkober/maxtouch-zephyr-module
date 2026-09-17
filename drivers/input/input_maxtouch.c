@@ -674,8 +674,7 @@ static int mxt_load_config(const struct device *dev,
         t100_conf.mrgthr = 2;           // Merge threshold: kleiner = zwei nahe Finger trennen leichter
         t100_conf.mrghyst = 5;          // Merge threshold hysteresis
         t100_conf.mrgthradjstr = 20;
-        t100_conf.movsmooth = 0;        // The amount of smoothing applied to movements,
-                                        // this tails off at higher speeds
+        t100_conf.movsmooth = config->move_smooth; // Glaettung bei langsamen Bewegungen
         t100_conf.movfilter = 0;        // The lower 4 bits are the speed response value, higher
                                         // values reduce lag, but also smoothing
 
@@ -945,6 +944,7 @@ static int mxt_init(const struct device *dev) {
         .move_hyst_initial = DT_INST_PROP(n, move_hysteresis_initial),                              \
         .move_hyst_next = DT_INST_PROP(n, move_hysteresis_next),                                    \
         .confthr = DT_INST_PROP(n, confthr),                                                        \
+        .move_smooth = DT_INST_PROP(n, move_smooth),                                                \
         .shieldless_enable = DT_INST_PROP(n, shieldless_enable),                                    \
         .diag_dump = DT_INST_PROP(n, diag_dump),                                                    \
         .touch_threshold = DT_INST_PROP_OR(n, touch_threshold, 18),                                     \
