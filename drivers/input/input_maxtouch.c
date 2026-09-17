@@ -59,6 +59,10 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
 #define MXT_CURSOR_START_MOVE 48 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
 #define MXT_SCROLL_DIV 60       // Counts pro Scroll-Schritt (~1.2 mm Fingerweg)
+// Abhebe-Erkennung: nur bei deutlichem Amplitudeneinbruch und nur kurz, sonst wird die
+// zurueckgehaltene Bewegung als Sprung nachgeliefert (Log: bis zu 211 Counts am Stueck).
+#define MXT_LIFT_DROP_PCT 70    // Amplitude unter 70 % des Mittels = moegliches Abheben
+#define MXT_LIFT_MAX_SAMPLES 3  // danach normal weiterbewegen (max. ~3 Messungen Verzug)
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
 static inline int16_t mxt_abs16(int16_t v) { return v < 0 ? -v : v; }
@@ -113,6 +117,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         f->ampl_cnt = 0;
         f->ampl_avg = 0;
         f->lift_buffering = false;
+        f->lift_samples = 0;
         f->buf_x = f->buf_y = 0;
         data->active_mask |= BIT(idx);
         if (first) {
@@ -166,11 +171,14 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 }
                 break;
             }
-            // Abhebe-Erkennung: Amplitude >10 % unter dem Mittel -> Bewegung zurueckhalten
-            if (f->ampl_avg && ampl * 10 < f->ampl_avg * 9) {
-                f->lift_buffering = true;
+            // Abhebe-Erkennung: Amplitude deutlich unter dem Mittel -> Bewegung zurueckhalten
+            if (f->ampl_avg && ampl * 100 < f->ampl_avg * MXT_LIFT_DROP_PCT) {
+                if (!f->lift_buffering) {
+                    f->lift_buffering = true;
+                    f->lift_samples = 0;
+                }
             }
-            if (ampl >= f->ampl_avg) {
+            if (ampl >= f->ampl_avg || f->lift_samples >= MXT_LIFT_MAX_SAMPLES) {
                 f->lift_buffering = false;
             }
             f->ampl_sum += ampl;
@@ -181,6 +189,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 f->ampl_cnt = 0;
             }
             if (f->lift_buffering) {
+                f->lift_samples++;
                 f->buf_x += dx;
                 f->buf_y += dy;
                 break;

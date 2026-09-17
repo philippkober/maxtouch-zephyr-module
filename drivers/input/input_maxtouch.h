@@ -18,6 +18,7 @@ struct mxt_finger {
     uint8_t ampl_cnt;
     uint8_t ampl_avg;
     bool lift_buffering;
+    uint8_t lift_samples;
     int16_t buf_x, buf_y;
 };
 
