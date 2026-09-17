@@ -48,17 +48,17 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 }
 
 // --- Gesten / Mausemulation --------------------------------------------------------------
-// Einheiten: ~24 Counts pro mm (1024 Counts ueber 42 mm, siehe Kconfig.shield)
+// Einheiten: ~49 Counts pro mm (2048 Counts ueber 42 mm, siehe Kconfig.shield)
 #define MXT_TAP_MAX_MS 250      // Tap: DOWN..UP kuerzer als das
 #define MXT_TAP2_MAX_MS 400     // Zwei-Finger-Tap: Finger landen/heben nicht gleichzeitig
-#define MXT_TAP_MAX_MOVE 40     // Tap: Bewegung kleiner als das (~1.7 mm)
-#define MXT_TAP2_MAX_MOVE 80    // Zwei-Finger-Tap: Schwerpunkt springt beim Aufsetzen staerker
+#define MXT_TAP_MAX_MOVE 80     // Tap: Bewegung kleiner als das (~1.6 mm)
+#define MXT_TAP2_MAX_MOVE 160   // Zwei-Finger-Tap: Schwerpunkt springt beim Aufsetzen staerker
 #define MXT_MERGED_AREA 14      // Flaeche ab der ein Touch als zwei verschmolzene Finger gilt
                                 // (Log: 1 Finger 7-9, 2 getrennte je 6-12, verschmolzen 14-18)
-#define MXT_JUMP_LIMIT 85       // groessere Spruenge pro Messung = Trennen/Verschmelzen, verwerfen
+#define MXT_JUMP_LIMIT 170      // groessere Spruenge pro Messung = Trennen/Verschmelzen, verwerfen
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
-#define MXT_CURSOR_START_MOVE 24 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
-#define MXT_SCROLL_DIV 28       // Counts pro Scroll-Schritt bei 2-Finger-Ziehen
+#define MXT_CURSOR_START_MOVE 48 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
+#define MXT_SCROLL_DIV 30       // Counts pro Scroll-Schritt (~0.6 mm Fingerweg)
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
 static inline int16_t mxt_abs16(int16_t v) { return v < 0 ? -v : v; }
@@ -184,6 +184,10 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 f->buf_x += dx;
                 f->buf_y += dy;
                 break;
+            }
+            if (f->buf_x != 0 || f->buf_y != 0) {
+                LOG_INF("gesture: lift buffer released dx=%d dy=%d (ampl=%d avg=%d)", f->buf_x,
+                        f->buf_y, ampl, f->ampl_avg);
             }
             dx += f->buf_x;
             dy += f->buf_y;
