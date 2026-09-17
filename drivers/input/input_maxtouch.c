@@ -51,20 +51,30 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_TAP_MAX_MS 250      // Tap: DOWN..UP kuerzer als das
 #define MXT_TAP_MAX_MOVE 30     // Tap: Bewegung kleiner als das (Counts, ~1.7 mm)
 #define MXT_SCROLL_DIV 20       // Counts pro Scroll-Schritt bei 2-Finger-Ziehen
-#define MXT_CLICK_RELEASE_MS 30
+#define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
 static inline int16_t mxt_abs16(int16_t v) { return v < 0 ? -v : v; }
+
+static void mxt_button_release(struct mxt_data *data) {
+    if (data->button_held) {
+        data->button_held = false;
+        data->dragging = false;
+        input_report_key(data->dev, data->click_button, 0, true, K_NO_WAIT);
+        LOG_INF("gesture: release");
+    }
+}
 
 static void mxt_click_release_cb(struct k_work *work) {
     struct k_work_delayable *dwork = k_work_delayable_from_work(work);
     struct mxt_data *data = CONTAINER_OF(dwork, struct mxt_data, click_release_work);
-    input_report_key(data->dev, data->click_button, 0, true, K_NO_WAIT);
+    mxt_button_release(data);
 }
 
 static void mxt_click(const struct device *dev, uint16_t code) {
     struct mxt_data *data = dev->data;
     LOG_INF("gesture: click button %s", code == INPUT_BTN_0 ? "left" : "right");
     data->click_button = code;
+    data->button_held = true;
     input_report_key(dev, code, 1, true, K_NO_WAIT);
     k_work_schedule(&data->click_release_work, K_MSEC(MXT_CLICK_RELEASE_MS));
 }
@@ -95,6 +105,12 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             data->gesture_max_fingers = 0;
             data->gesture_moved = false;
             data->scroll_acc_x = data->scroll_acc_y = 0;
+            if (data->button_held && data->click_button == INPUT_BTN_0) {
+                // Tap-and-Drag: Finger kam zurueck, solange die Taste noch gehalten wird
+                k_work_cancel_delayable(&data->click_release_work);
+                data->dragging = true;
+                LOG_INF("gesture: drag start");
+            }
         }
         uint8_t n = __builtin_popcount(data->active_mask);
         if (n > data->gesture_max_fingers) {
@@ -131,6 +147,9 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 data->scroll_acc_x -= hs * MXT_SCROLL_DIV;
                 input_report_rel(dev, INPUT_REL_HWHEEL, hs, true, K_NO_WAIT);
             }
+            if (vs != 0 || hs != 0) {
+                LOG_INF("gesture: scroll v=%d h=%d (fingers=%d)", vs, hs, n);
+            }
         }
         break;
     }
@@ -139,7 +158,10 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         data->active_mask &= ~BIT(idx);
         if (data->active_mask == 0) {
             uint32_t dur = now - data->gesture_start_ms;
-            if (!data->gesture_moved && dur <= MXT_TAP_MAX_MS) {
+            if (data->dragging) {
+                LOG_INF("gesture: drag end");
+                mxt_button_release(data);
+            } else if (!data->gesture_moved && dur <= MXT_TAP_MAX_MS) {
                 if (data->gesture_max_fingers == 1) {
                     mxt_click(dev, INPUT_BTN_0);
                 } else if (data->gesture_max_fingers == 2) {
