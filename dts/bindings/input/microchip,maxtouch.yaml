@@ -83,3 +83,24 @@ properties:
   diag-dump:
     type: boolean
     description: Log T37 reference values once after init and delta values every 3s (diagnostics only).
+  x-pitch:
+    type: int
+    description: Pitch between X lines in 0.1 mm. Default is sensor-width / x-lines.
+  y-pitch:
+    type: int
+    description: Pitch between Y lines in 0.1 mm. Default is sensor-height / y-lines.
+  move-hysteresis-initial:
+    type: int
+    default: 10
+    description: T100 MOVHYSTI, movement needed before the first move event.
+  move-hysteresis-next:
+    type: int
+    default: 4
+    description: T100 MOVHYSTN, movement hysteresis for subsequent move events (higher = less jitter).
+  confthr:
+    type: int
+    default: 0
+    description: T100 CFG2 touch debounce (confidence threshold).
+  shieldless-enable:
+    type: boolean
+    description: Enable the T56 shieldless noise suppression (used by the author for Procyon boards).

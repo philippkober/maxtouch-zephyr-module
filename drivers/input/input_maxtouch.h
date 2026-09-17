@@ -12,6 +12,13 @@ struct mxt_finger {
     int16_t x, y;
     int16_t down_x, down_y;
     bool merged;        // Kontaktflaeche so gross, dass es zwei verschmolzene Finger sind
+    // Abhebe-Erkennung (wie im QMK-Treiber des Autors): faellt die Amplitude um >10 %,
+    // wird die Bewegung zurueckgehalten und beim Abheben verworfen.
+    int32_t ampl_sum;
+    uint8_t ampl_cnt;
+    uint8_t ampl_avg;
+    bool lift_buffering;
+    int16_t buf_x, buf_y;
 };
 
 struct mxt_data {
@@ -23,7 +30,7 @@ struct mxt_data {
     uint32_t gesture_start_ms;
     bool gesture_moved;
     int16_t scroll_acc_x, scroll_acc_y;
-    int16_t cursor_acc_x, cursor_acc_y; // Bewegung zu Gestenbeginn, bis klar ist ob 1 oder 2 Finger
+    bool cursor_started; // Cursor laeuft erst nach Wartezeit/Mindestweg, Bewegung davor wird verworfen
     struct k_work_delayable click_release_work;
     uint16_t click_button;
     bool ready;         // Chip konfiguriert, alte Meldungen verworfen: erst dann Gesten auswerten
@@ -78,6 +85,12 @@ struct mxt_config {
     const uint16_t sensor_height;
     const uint8_t x_lines;
     const uint8_t y_lines;
+    const uint8_t x_pitch;
+    const uint8_t y_pitch;
+    const uint8_t move_hyst_initial;
+    const uint8_t move_hyst_next;
+    const uint8_t confthr;
+    const bool shieldless_enable;
     const bool diag_dump;
     const uint8_t touch_threshold;
     const uint8_t touch_hysteresis;
@@ -113,7 +126,7 @@ struct mxt_information_block {
 
 struct mxt_message {
     uint8_t report_id;
-    uint8_t data[6];
+    uint8_t data[8]; // status, x(2), y(2), aux: ampl, area
 } __packed;
 
 struct mxt_message_count {

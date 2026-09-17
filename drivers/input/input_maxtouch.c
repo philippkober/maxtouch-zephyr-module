@@ -48,15 +48,17 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 }
 
 // --- Gesten / Mausemulation --------------------------------------------------------------
+// Einheiten: ~24 Counts pro mm (1024 Counts ueber 42 mm, siehe Kconfig.shield)
 #define MXT_TAP_MAX_MS 250      // Tap: DOWN..UP kuerzer als das
 #define MXT_TAP2_MAX_MS 400     // Zwei-Finger-Tap: Finger landen/heben nicht gleichzeitig
-#define MXT_TAP_MAX_MOVE 30     // Tap: Bewegung kleiner als das (Counts, ~1.7 mm)
-#define MXT_TAP2_MAX_MOVE 60    // Zwei-Finger-Tap: Schwerpunkt springt beim Aufsetzen staerker
+#define MXT_TAP_MAX_MOVE 40     // Tap: Bewegung kleiner als das (~1.7 mm)
+#define MXT_TAP2_MAX_MOVE 80    // Zwei-Finger-Tap: Schwerpunkt springt beim Aufsetzen staerker
 #define MXT_MERGED_AREA 14      // Flaeche ab der ein Touch als zwei verschmolzene Finger gilt
                                 // (Log: 1 Finger 7-9, 2 getrennte je 6-12, verschmolzen 14-18)
-#define MXT_JUMP_LIMIT 60       // groessere Spruenge pro Messung = Trennen/Verschmelzen, verwerfen
-#define MXT_MULTI_WAIT_MS 120   // so lange Cursorbewegung puffern, ob noch ein zweiter Finger kommt
-#define MXT_SCROLL_DIV 20       // Counts pro Scroll-Schritt bei 2-Finger-Ziehen
+#define MXT_JUMP_LIMIT 85       // groessere Spruenge pro Messung = Trennen/Verschmelzen, verwerfen
+#define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
+#define MXT_CURSOR_START_MOVE 24 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
+#define MXT_SCROLL_DIV 28       // Counts pro Scroll-Schritt bei 2-Finger-Ziehen
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
 static inline int16_t mxt_abs16(int16_t v) { return v < 0 ? -v : v; }
@@ -86,7 +88,7 @@ static void mxt_click(const struct device *dev, uint16_t code) {
 }
 
 static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_touch_event ev,
-                              uint16_t x_pos, uint16_t y_pos, uint8_t area) {
+                              uint16_t x_pos, uint16_t y_pos, uint8_t ampl, uint8_t area) {
     struct mxt_data *data = dev->data;
     if (idx >= MXT_MAX_FINGERS || !data->ready) {
         return;
@@ -107,13 +109,18 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         f->x = f->down_x = x;
         f->y = f->down_y = y;
         f->merged = merged;
+        f->ampl_sum = 0;
+        f->ampl_cnt = 0;
+        f->ampl_avg = 0;
+        f->lift_buffering = false;
+        f->buf_x = f->buf_y = 0;
         data->active_mask |= BIT(idx);
         if (first) {
             data->gesture_start_ms = now;
             data->gesture_max_fingers = 0;
             data->gesture_moved = false;
             data->scroll_acc_x = data->scroll_acc_y = 0;
-            data->cursor_acc_x = data->cursor_acc_y = 0;
+            data->cursor_started = false;
             if (data->button_held && data->click_button == INPUT_BTN_0) {
                 // Tap-and-Drag: Finger kam zurueck, solange die Taste noch gehalten wird
                 k_work_cancel_delayable(&data->click_release_work);
@@ -148,15 +155,42 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             data->gesture_moved = true;
         }
         if (data->gesture_max_fingers == 1) {
-            // Reine Ein-Finger-Geste: Cursor. Am Anfang puffern, bis klar ist, dass kein
-            // zweiter Finger folgt (sonst springt der Cursor beim Scroll-Beginn).
-            data->cursor_acc_x += dx;
-            data->cursor_acc_y += dy;
-            if (k_uptime_get_32() - data->gesture_start_ms >= MXT_MULTI_WAIT_MS &&
-                (data->cursor_acc_x != 0 || data->cursor_acc_y != 0)) {
-                input_report_rel(dev, INPUT_REL_X, data->cursor_acc_x, false, K_NO_WAIT);
-                input_report_rel(dev, INPUT_REL_Y, data->cursor_acc_y, true, K_NO_WAIT);
-                data->cursor_acc_x = data->cursor_acc_y = 0;
+            // Reine Ein-Finger-Geste: Cursor.
+            if (!data->cursor_started) {
+                // Wie im QMK-Treiber: Bewegung am Anfang verwerfen (nicht sammeln), bis
+                // Wartezeit oder Mindestweg erreicht sind. Kein Sprung beim Start.
+                if (now - data->gesture_start_ms >= MXT_CURSOR_WAIT_MS ||
+                    mxt_abs16(x - f->down_x) > MXT_CURSOR_START_MOVE ||
+                    mxt_abs16(y - f->down_y) > MXT_CURSOR_START_MOVE) {
+                    data->cursor_started = true;
+                }
+                break;
+            }
+            // Abhebe-Erkennung: Amplitude >10 % unter dem Mittel -> Bewegung zurueckhalten
+            if (f->ampl_avg && ampl * 10 < f->ampl_avg * 9) {
+                f->lift_buffering = true;
+            }
+            if (ampl >= f->ampl_avg) {
+                f->lift_buffering = false;
+            }
+            f->ampl_sum += ampl;
+            f->ampl_cnt++;
+            if ((!f->lift_buffering && f->ampl_cnt > 5) || f->ampl_cnt > 16) {
+                f->ampl_avg = f->ampl_sum / f->ampl_cnt;
+                f->ampl_sum = 0;
+                f->ampl_cnt = 0;
+            }
+            if (f->lift_buffering) {
+                f->buf_x += dx;
+                f->buf_y += dy;
+                break;
+            }
+            dx += f->buf_x;
+            dy += f->buf_y;
+            f->buf_x = f->buf_y = 0;
+            if (dx != 0 || dy != 0) {
+                input_report_rel(dev, INPUT_REL_X, dx, false, K_NO_WAIT);
+                input_report_rel(dev, INPUT_REL_Y, dy, true, K_NO_WAIT);
             }
         } else if (idx == lowest && (n >= 2 || merged)) {
             // Zwei Finger (getrennt oder verschmolzen): Bewegung des ersten Fingers wird zu
@@ -263,30 +297,32 @@ static void mxt_report_data(const struct device *dev) {
             uint16_t x_pos = msg.data[1] + (msg.data[2] << 8);
             uint16_t y_pos = msg.data[3] + (msg.data[4] << 8);
 
-            uint8_t area = msg.data[5];
-            LOG_INF("touch finger=%d ev=%d x=%d y=%d area=%d", finger_idx, ev, x_pos, y_pos, area);
+            uint8_t ampl = msg.data[5];
+            uint8_t area = msg.data[6];
+            LOG_INF("touch finger=%d ev=%d x=%d y=%d ampl=%d area=%d", finger_idx, ev, x_pos, y_pos,
+                    ampl, area);
             // Alle Event-Typen an die Gesten: schnelle Tipps kommen als DOWNUP,
             // unterdrueckte Finger als SUP/DOWNSUP/UNSUPUP.
             switch (ev) {
             case DOWNUP:
-                mxt_process_touch(dev, finger_idx, DOWN, x_pos, y_pos, area);
-                mxt_process_touch(dev, finger_idx, UP, x_pos, y_pos, area);
+                mxt_process_touch(dev, finger_idx, DOWN, x_pos, y_pos, ampl, area);
+                mxt_process_touch(dev, finger_idx, UP, x_pos, y_pos, ampl, area);
                 break;
             case UNSUPUP:
                 // ausgeblendeter Finger wurde tatsaechlich abgehoben
-                mxt_process_touch(dev, finger_idx, UP, x_pos, y_pos, area);
+                mxt_process_touch(dev, finger_idx, UP, x_pos, y_pos, ampl, area);
                 break;
             case SUP:
             case DOWNSUP:
                 // Finger liegt noch, wird aber ausgeblendet: Zustand beibehalten
                 break;
             case UNSUP:
-                mxt_process_touch(dev, finger_idx, MOVE, x_pos, y_pos, area);
+                mxt_process_touch(dev, finger_idx, MOVE, x_pos, y_pos, ampl, area);
                 break;
             case DOWN:
             case MOVE:
             case UP:
-                mxt_process_touch(dev, finger_idx, ev, x_pos, y_pos, area);
+                mxt_process_touch(dev, finger_idx, ev, x_pos, y_pos, ampl, area);
                 break;
             default:
                 break;
@@ -530,6 +566,16 @@ static int mxt_load_config(const struct device *dev,
     }
 #endif
 
+    if (config->shieldless_enable && data->t56_proci_shieldless_address) {
+        // Nur die ersten 4 Bytes schreiben (Objekt ist auf diesem Chip 18 Bytes gross)
+        uint8_t t56_conf[4] = {MXT_T56_CTRL_ENABLE, 0, 1 /* optint */, 10 /* inttime */};
+        ret = mxt_seq_write(dev, data->t56_proci_shieldless_address, t56_conf, sizeof(t56_conf));
+        if (ret < 0) {
+            LOG_ERR("Failed to set T56 config: %d", ret);
+            return ret;
+        }
+    }
+
     if (data->t80_proci_retransmissioncompensation_address) {
         struct mxt_proci_retransmissioncompensation_t80 t80_conf = {};
         t80_conf.ctrl = config->retransmission_compensation_disable == false;
@@ -580,7 +626,9 @@ static int mxt_load_config(const struct device *dev,
         t100_conf.cfg1 = cfg1; // Could also handle rotation, and axis inversion in hardware here
 
         t100_conf.scraux = 0x7;   // AUX data: Report the number of touch events, touch area, anti touch area
-        t100_conf.tchaux = 0x04;  // pro Touch die Kontaktflaeche (AREA) mitsenden -> msg.data[5]
+        t100_conf.tchaux = 0x02 | 0x04; // pro Touch Amplitude (data[5]) und Flaeche (data[6])
+        t100_conf.tcheventcfg = 24;     // wie QMK-Treiber: Meldungen fuer ausgeblendete Finger aus
+        t100_conf.amplcoeff = 16;       // Amplitude skalieren (QMK/Procyon)
         t100_conf.numtch = config->max_touch_points;  // The number of touch reports
                                                       // we want to receive (upto 10)
         // Tatsaechlich belegte Leitungen des Sensor-PCBs; der Info-Block liefert nur das
@@ -595,8 +643,8 @@ static int mxt_load_config(const struct device *dev,
         t100_conf.xsize = x_lines;
         t100_conf.yorigin = 0;
         t100_conf.ysize = y_lines;
-        t100_conf.xpitch = (config->sensor_width * 10 / x_lines);   // Pitch between X-Lines (0.1mm * XPitch).
-        t100_conf.ypitch = (config->sensor_height * 10 / y_lines);  // Pitch between Y-Lines (0.1mm * YPitch).
+        t100_conf.xpitch = config->x_pitch ? config->x_pitch : (config->sensor_width * 10 / x_lines);
+        t100_conf.ypitch = config->y_pitch ? config->y_pitch : (config->sensor_height * 10 / y_lines);
         LOG_INF("T100 matrix %dx%d lines, pitch %d/%d (0.1mm)", x_lines, y_lines, t100_conf.xpitch,
                 t100_conf.ypitch);
         t100_conf.xedgecfg = 9;
@@ -620,8 +668,9 @@ static int mxt_load_config(const struct device *dev,
 
         // These two fields implement a simple filter for reducing jitter, but large
         // values cause the pointer to stick in place before moving.
-        t100_conf.movhysti = 10; // Initial movement hysteresis
-        t100_conf.movhystn = 4; // Next movement hysteresis
+        t100_conf.movhysti = sys_cpu_to_le16(config->move_hyst_initial); // Initial movement hysteresis
+        t100_conf.movhystn = sys_cpu_to_le16(config->move_hyst_next);    // Next movement hysteresis
+        t100_conf.cfg2 = config->confthr;                                // Touch-Entprellung
 
         t100_conf.tchdiup = 4; // MXT_UP touch detection integration - the number of cycles before the sensor decides an MXT_UP event has occurred
         t100_conf.tchdidown = 2; // MXT_DOWN touch detection integration - the number of cycles before the sensor decides an MXT_DOWN event has occurred
@@ -878,6 +927,12 @@ static int mxt_init(const struct device *dev) {
         .sensor_height = DT_INST_PROP(n, sensor_height),                                                \
         .x_lines = DT_INST_PROP_OR(n, x_lines, 0),                                                  \
         .y_lines = DT_INST_PROP_OR(n, y_lines, 0),                                                  \
+        .x_pitch = DT_INST_PROP_OR(n, x_pitch, 0),                                                  \
+        .y_pitch = DT_INST_PROP_OR(n, y_pitch, 0),                                                  \
+        .move_hyst_initial = DT_INST_PROP(n, move_hysteresis_initial),                              \
+        .move_hyst_next = DT_INST_PROP(n, move_hysteresis_next),                                    \
+        .confthr = DT_INST_PROP(n, confthr),                                                        \
+        .shieldless_enable = DT_INST_PROP(n, shieldless_enable),                                    \
         .diag_dump = DT_INST_PROP(n, diag_dump),                                                    \
         .touch_threshold = DT_INST_PROP_OR(n, touch_threshold, 18),                                     \
         .touch_hysteresis = DT_INST_PROP_OR(n, touch_hysteresis, 8),                                    \
