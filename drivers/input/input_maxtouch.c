@@ -52,7 +52,7 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_TAP2_MAX_MS 400     // Zwei-Finger-Tap: Finger landen/heben nicht gleichzeitig
 #define MXT_TAP_MAX_MOVE 30     // Tap: Bewegung kleiner als das (Counts, ~1.7 mm)
 #define MXT_TAP2_MAX_MOVE 60    // Zwei-Finger-Tap: Schwerpunkt springt beim Aufsetzen staerker
-#define MXT_MULTI_WAIT_MS 60    // so lange Cursorbewegung puffern, ob noch ein zweiter Finger kommt
+#define MXT_MULTI_WAIT_MS 120   // so lange Cursorbewegung puffern, ob noch ein zweiter Finger kommt
 #define MXT_SCROLL_DIV 20       // Counts pro Scroll-Schritt bei 2-Finger-Ziehen
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
@@ -247,7 +247,8 @@ static void mxt_report_data(const struct device *dev) {
             uint16_t x_pos = msg.data[1] + (msg.data[2] << 8);
             uint16_t y_pos = msg.data[3] + (msg.data[4] << 8);
 
-            LOG_INF("touch finger=%d ev=%d x=%d y=%d", finger_idx, ev, x_pos, y_pos);
+            uint8_t area = msg.data[5];
+            LOG_INF("touch finger=%d ev=%d x=%d y=%d area=%d", finger_idx, ev, x_pos, y_pos, area);
             // Alle Event-Typen an die Gesten: schnelle Tipps kommen als DOWNUP,
             // unterdrueckte Finger als SUP/DOWNSUP/UNSUPUP.
             switch (ev) {
@@ -562,7 +563,8 @@ static int mxt_load_config(const struct device *dev,
 
         t100_conf.cfg1 = cfg1; // Could also handle rotation, and axis inversion in hardware here
 
-        t100_conf.scraux = 0x7;                       // AUX data: Report the number of touch events, touch area, anti touch area
+        t100_conf.scraux = 0x7;
+        t100_conf.tchaux = 0x04; // pro Touch die Kontaktflaeche (AREA) mitsenden -> msg.data[5]                       // AUX data: Report the number of touch events, touch area, anti touch area
         t100_conf.numtch = config->max_touch_points;  // The number of touch reports
                                                       // we want to receive (upto 10)
         // Tatsaechlich belegte Leitungen des Sensor-PCBs; der Info-Block liefert nur das
