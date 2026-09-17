@@ -53,8 +53,8 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_TAP2_MAX_MS 400     // Zwei-Finger-Tap: Finger landen/heben nicht gleichzeitig
 #define MXT_TAP_MAX_MOVE 80     // Tap: Bewegung kleiner als das (~1.6 mm)
 #define MXT_TAP2_MAX_MOVE 160   // Zwei-Finger-Tap: Schwerpunkt springt beim Aufsetzen staerker
-#define MXT_MERGED_AREA 14      // Flaeche ab der ein Touch als zwei verschmolzene Finger gilt
-                                // (Log: 1 Finger 7-9, 2 getrennte je 6-12, verschmolzen 14-18)
+#define MXT_MERGED_AREA 16      // Flaeche ab der ein Touch als zwei verschmolzene Finger gilt
+                                // (Log: 1 Finger 7-13 je nach Druck, verschmolzen 14-18)
 #define MXT_JUMP_LIMIT 170      // groessere Spruenge pro Messung = Trennen/Verschmelzen, verwerfen
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
 #define MXT_CURSOR_START_MOVE 48 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
