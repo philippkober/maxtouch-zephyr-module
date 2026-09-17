@@ -58,7 +58,7 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_JUMP_LIMIT 170      // groessere Spruenge pro Messung = Trennen/Verschmelzen, verwerfen
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
 #define MXT_CURSOR_START_MOVE 48 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
-#define MXT_SCROLL_DIV 30       // Counts pro Scroll-Schritt (~0.6 mm Fingerweg)
+#define MXT_SCROLL_DIV 60       // Counts pro Scroll-Schritt (~1.2 mm Fingerweg)
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
 static inline int16_t mxt_abs16(int16_t v) { return v < 0 ? -v : v; }
