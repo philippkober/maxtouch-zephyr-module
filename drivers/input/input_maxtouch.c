@@ -563,8 +563,8 @@ static int mxt_load_config(const struct device *dev,
 
         t100_conf.cfg1 = cfg1; // Could also handle rotation, and axis inversion in hardware here
 
-        t100_conf.scraux = 0x7;
-        t100_conf.tchaux = 0x04; // pro Touch die Kontaktflaeche (AREA) mitsenden -> msg.data[5]                       // AUX data: Report the number of touch events, touch area, anti touch area
+        t100_conf.scraux = 0x7;   // AUX data: Report the number of touch events, touch area, anti touch area
+        t100_conf.tchaux = 0x04;  // pro Touch die Kontaktflaeche (AREA) mitsenden -> msg.data[5]
         t100_conf.numtch = config->max_touch_points;  // The number of touch reports
                                                       // we want to receive (upto 10)
         // Tatsaechlich belegte Leitungen des Sensor-PCBs; der Info-Block liefert nur das
