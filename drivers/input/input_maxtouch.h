@@ -26,8 +26,6 @@ struct mxt_data {
     uint16_t click_button;
     bool button_held;   // Taste gedrueckt (Tap-Release ausstehend oder Drag laeuft)
     bool dragging;      // Tap-and-Drag aktiv
-    bool button_held;   // Taste gedrueckt (Tap-Release ausstehend oder Drag laeuft)
-    bool dragging;      // Tap-and-Drag aktiv
     struct gpio_callback gpio_cb;
     struct k_work work;
     struct k_work_delayable init_work;

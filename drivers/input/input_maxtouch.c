@@ -559,8 +559,8 @@ static int mxt_load_config(const struct device *dev,
         t100_conf.tchhyst = config->touch_hysteresis;
         t100_conf.intthr = config->internal_touch_threshold;
         t100_conf.intthryst = config->internal_touch_hysteresis;
-        t100_conf.mrgthr = 5;           // Merge threshold
-        t100_conf.mrghyst = 10;         // Merge threshold hysteresis
+        t100_conf.mrgthr = 2;           // Merge threshold: kleiner = zwei nahe Finger trennen leichter
+        t100_conf.mrghyst = 5;          // Merge threshold hysteresis
         t100_conf.mrgthradjstr = 20;
         t100_conf.movsmooth = 0;        // The amount of smoothing applied to movements,
                                         // this tails off at higher speeds
