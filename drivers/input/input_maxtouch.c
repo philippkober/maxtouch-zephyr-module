@@ -49,7 +49,10 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 
 // --- Gesten / Mausemulation --------------------------------------------------------------
 #define MXT_TAP_MAX_MS 250      // Tap: DOWN..UP kuerzer als das
+#define MXT_TAP2_MAX_MS 400     // Zwei-Finger-Tap: Finger landen/heben nicht gleichzeitig
 #define MXT_TAP_MAX_MOVE 30     // Tap: Bewegung kleiner als das (Counts, ~1.7 mm)
+#define MXT_TAP2_MAX_MOVE 60    // Zwei-Finger-Tap: Schwerpunkt springt beim Aufsetzen staerker
+#define MXT_MULTI_WAIT_MS 60    // so lange Cursorbewegung puffern, ob noch ein zweiter Finger kommt
 #define MXT_SCROLL_DIV 20       // Counts pro Scroll-Schritt bei 2-Finger-Ziehen
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
@@ -105,6 +108,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             data->gesture_max_fingers = 0;
             data->gesture_moved = false;
             data->scroll_acc_x = data->scroll_acc_y = 0;
+            data->cursor_acc_x = data->cursor_acc_y = 0;
             if (data->button_held && data->click_button == INPUT_BTN_0) {
                 // Tap-and-Drag: Finger kam zurueck, solange die Taste noch gehalten wird
                 k_work_cancel_delayable(&data->click_release_work);
@@ -122,16 +126,22 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         int16_t dx = x - f->x, dy = y - f->y;
         f->x = x;
         f->y = y;
-        if (mxt_abs16(x - f->down_x) > MXT_TAP_MAX_MOVE ||
-            mxt_abs16(y - f->down_y) > MXT_TAP_MAX_MOVE) {
-            data->gesture_moved = true;
-        }
         uint8_t n = __builtin_popcount(data->active_mask);
         uint8_t lowest = __builtin_ctz(data->active_mask);
-        if (n == 1) {
-            if (dx != 0 || dy != 0) {
-                input_report_rel(dev, INPUT_REL_X, dx, false, K_NO_WAIT);
-                input_report_rel(dev, INPUT_REL_Y, dy, true, K_NO_WAIT);
+        int16_t tap_move = data->gesture_max_fingers >= 2 ? MXT_TAP2_MAX_MOVE : MXT_TAP_MAX_MOVE;
+        if (mxt_abs16(x - f->down_x) > tap_move || mxt_abs16(y - f->down_y) > tap_move) {
+            data->gesture_moved = true;
+        }
+        if (data->gesture_max_fingers == 1) {
+            // Reine Ein-Finger-Geste: Cursor. Am Anfang puffern, bis klar ist, dass kein
+            // zweiter Finger folgt (sonst springt der Cursor beim Scroll-Beginn).
+            data->cursor_acc_x += dx;
+            data->cursor_acc_y += dy;
+            if (k_uptime_get_32() - data->gesture_start_ms >= MXT_MULTI_WAIT_MS &&
+                (data->cursor_acc_x != 0 || data->cursor_acc_y != 0)) {
+                input_report_rel(dev, INPUT_REL_X, data->cursor_acc_x, false, K_NO_WAIT);
+                input_report_rel(dev, INPUT_REL_Y, data->cursor_acc_y, true, K_NO_WAIT);
+                data->cursor_acc_x = data->cursor_acc_y = 0;
             }
         } else if (n >= 2 && idx == lowest) {
             // Zwei Finger: Bewegung des ersten Fingers wird zu Scroll-Schritten
@@ -154,6 +164,9 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         break;
     }
     case UP: {
+        if (!f->active) {
+            break; // UP fuer einen Finger, der nicht (mehr) aktiv ist: keine zweite Gestenauswertung
+        }
         f->active = false;
         data->active_mask &= ~BIT(idx);
         if (data->active_mask == 0) {
@@ -161,11 +174,16 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             if (data->dragging) {
                 LOG_INF("gesture: drag end");
                 mxt_button_release(data);
-            } else if (!data->gesture_moved && dur <= MXT_TAP_MAX_MS) {
-                if (data->gesture_max_fingers == 1) {
-                    mxt_click(dev, INPUT_BTN_0);
-                } else if (data->gesture_max_fingers == 2) {
-                    mxt_click(dev, INPUT_BTN_1);
+            } else {
+                uint32_t max_ms = data->gesture_max_fingers >= 2 ? MXT_TAP2_MAX_MS : MXT_TAP_MAX_MS;
+                LOG_INF("gesture: end fingers=%d moved=%d dur=%u", data->gesture_max_fingers,
+                        data->gesture_moved, dur);
+                if (!data->gesture_moved && dur <= max_ms) {
+                    if (data->gesture_max_fingers == 1) {
+                        mxt_click(dev, INPUT_BTN_0);
+                    } else if (data->gesture_max_fingers == 2) {
+                        mxt_click(dev, INPUT_BTN_1);
+                    }
                 }
             }
         }
@@ -223,32 +241,41 @@ static void mxt_report_data(const struct device *dev) {
             uint16_t x_pos = msg.data[1] + (msg.data[2] << 8);
             uint16_t y_pos = msg.data[3] + (msg.data[4] << 8);
 
+            LOG_INF("touch finger=%d ev=%d x=%d y=%d", finger_idx, ev, x_pos, y_pos);
+            // Alle Event-Typen an die Gesten: schnelle Tipps kommen als DOWNUP,
+            // unterdrueckte Finger als SUP/DOWNSUP/UNSUPUP.
             switch (ev) {
+            case DOWNUP:
+                mxt_process_touch(dev, finger_idx, DOWN, x_pos, y_pos);
+                mxt_process_touch(dev, finger_idx, UP, x_pos, y_pos);
+                break;
+            case DOWNSUP:
+                mxt_process_touch(dev, finger_idx, DOWN, x_pos, y_pos);
+                mxt_process_touch(dev, finger_idx, UP, x_pos, y_pos);
+                break;
+            case SUP:
+            case UNSUPUP:
+                mxt_process_touch(dev, finger_idx, UP, x_pos, y_pos);
+                break;
+            case UNSUP:
+                mxt_process_touch(dev, finger_idx, MOVE, x_pos, y_pos);
+                break;
             case DOWN:
             case MOVE:
             case UP:
-            case NO_EVENT:
-                if (pending_for_finger) {
-                    input_report_key(dev, INPUT_BTN_TOUCH, last_touch_status, true, K_FOREVER);
-                    pending_fingers = 0;
-                }
-                WRITE_BIT(pending_fingers, finger_idx, 1);
-                last_touch_status = (ev != UP);
-                LOG_INF("touch finger=%d ev=%d x=%d y=%d", finger_idx, ev, x_pos, y_pos);
                 mxt_process_touch(dev, finger_idx, ev, x_pos, y_pos);
                 break;
             default:
-                // All other events are ignored
                 break;
             }
+            (void)pending_for_finger;
         } else {
             LOG_HEXDUMP_DBG(msg.data, 5, "message data");
         }
     }
 
-    if (pending_fingers != 0) {
-        input_report_key(dev, INPUT_BTN_TOUCH, last_touch_status, true, K_FOREVER);
-    }
+    (void)pending_fingers;
+    (void)last_touch_status;
 
     return;
 }
