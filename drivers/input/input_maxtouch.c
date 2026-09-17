@@ -58,7 +58,7 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_JUMP_LIMIT 170      // groessere Spruenge pro Messung = Trennen/Verschmelzen, verwerfen
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
 #define MXT_CURSOR_START_MOVE 48 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
-#define MXT_SCROLL_DIV 60       // Counts pro Scroll-Schritt (~1.2 mm Fingerweg)
+#define MXT_SCROLL_DIV 120      // Counts pro Scroll-Schritt (~2.4 mm Fingerweg)
 // Abhebe-Erkennung: nur bei deutlichem Amplitudeneinbruch und nur kurz, sonst wird die
 // zurueckgehaltene Bewegung als Sprung nachgeliefert (Log: bis zu 211 Counts am Stueck).
 #define MXT_LIFT_DROP_PCT 70    // Amplitude unter 70 % des Mittels = moegliches Abheben
