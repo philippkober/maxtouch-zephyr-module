@@ -23,7 +23,6 @@ struct mxt_data {
     bool gesture_moved;
     int16_t scroll_acc_x, scroll_acc_y;
     int16_t cursor_acc_x, cursor_acc_y; // Bewegung zu Gestenbeginn, bis klar ist ob 1 oder 2 Finger
-    uint32_t count_change_ms; // letzter Wechsel der Fingerzahl (danach kurz keine Scroll-Bewegung)
     struct k_work_delayable click_release_work;
     uint16_t click_button;
     bool button_held;   // Taste gedrueckt (Tap-Release ausstehend oder Drag laeuft)
