@@ -51,10 +51,12 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 // Einheiten: ~49 Counts pro mm (2048 Counts ueber 42 mm, siehe Kconfig.shield)
 #define MXT_TAP_MAX_MS 250      // Tap: DOWN..UP kuerzer als das
 #define MXT_TAP2_MAX_MS 400     // Zwei-Finger-Tap: Finger landen/heben nicht gleichzeitig
+#define MXT_TAP2_IGNORE_MOVE_MS 250 // so kurze Zwei-Finger-Tips zaehlen trotz Schwerpunktsprung
 #define MXT_TAP_MAX_MOVE 80     // Tap: Bewegung kleiner als das (~1.6 mm)
 #define MXT_TAP2_MAX_MOVE 160   // Zwei-Finger-Tap: Schwerpunkt springt beim Aufsetzen staerker
-#define MXT_MERGED_AREA 16      // Flaeche ab der ein Touch als zwei verschmolzene Finger gilt
-                                // (Log: 1 Finger 7-13 je nach Druck, verschmolzen 14-18)
+#define MXT_MERGED_AREA 24      // Flaeche ab der ein Touch als zwei verschmolzene Finger gilt.
+                                // Mit der duennen Platte erreicht ein einzelner Finger bis 18,
+                                // daher hoch angesetzt (der Chip trennt zwei Finger jetzt gut).
 #define MXT_JUMP_LIMIT 170      // groessere Spruenge pro Messung = Trennen/Verschmelzen, verwerfen
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
 #define MXT_CURSOR_START_MOVE 48 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
@@ -247,12 +249,12 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 uint32_t max_ms = data->gesture_max_fingers >= 2 ? MXT_TAP2_MAX_MS : MXT_TAP_MAX_MS;
                 LOG_INF("gesture: end fingers=%d moved=%d dur=%u", data->gesture_max_fingers,
                         data->gesture_moved, dur);
-                if (!data->gesture_moved && dur <= max_ms) {
-                    if (data->gesture_max_fingers == 1) {
-                        mxt_click(dev, INPUT_BTN_0);
-                    } else if (data->gesture_max_fingers == 2) {
-                        mxt_click(dev, INPUT_BTN_1);
-                    }
+                bool two_finger_tap = data->gesture_max_fingers == 2 &&
+                                      (!data->gesture_moved || dur <= MXT_TAP2_IGNORE_MOVE_MS);
+                if (data->gesture_max_fingers == 1 && !data->gesture_moved && dur <= max_ms) {
+                    mxt_click(dev, INPUT_BTN_0);
+                } else if (two_finger_tap && dur <= max_ms) {
+                    mxt_click(dev, INPUT_BTN_1);
                 }
             }
         }
