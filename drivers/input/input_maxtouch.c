@@ -66,8 +66,9 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_SCROLL_DIV 120      // Counts pro Scroll-Schritt (~2.4 mm Fingerweg)
 // Abhebe-Erkennung: nur bei deutlichem Amplitudeneinbruch und nur kurz, sonst wird die
 // zurueckgehaltene Bewegung als Sprung nachgeliefert (Log: bis zu 211 Counts am Stueck).
-#define MXT_LIFT_DROP_PCT 70    // Amplitude unter 70 % des Mittels = moegliches Abheben
-#define MXT_LIFT_MAX_SAMPLES 3  // danach normal weiterbewegen (max. ~3 Messungen Verzug)
+#define MXT_LIFT_DROP_PCT 80    // Amplitude unter 80 % des Mittels = moegliches Abheben
+#define MXT_LIFT_AREA_PCT 75    // ... oder Flaeche unter 75 % der Flaeche beim Aufsetzen
+#define MXT_LIFT_MAX_SAMPLES 8  // danach normal weiterbewegen (max. ~8 Messungen Verzug)
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
 static inline int16_t mxt_abs16(int16_t v) { return v < 0 ? -v : v; }
@@ -185,13 +186,15 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 break;
             }
             // Abhebe-Erkennung: Amplitude deutlich unter dem Mittel -> Bewegung zurueckhalten
-            if (f->ampl_avg && ampl * 100 < f->ampl_avg * MXT_LIFT_DROP_PCT) {
+            bool ampl_drop = f->ampl_avg && ampl * 100 < f->ampl_avg * MXT_LIFT_DROP_PCT;
+            bool area_drop = f->down_area && area * 100 < f->down_area * MXT_LIFT_AREA_PCT;
+            if (ampl_drop || area_drop) {
                 if (!f->lift_buffering) {
                     f->lift_buffering = true;
                     f->lift_samples = 0;
                 }
             }
-            if (ampl >= f->ampl_avg || f->lift_samples >= MXT_LIFT_MAX_SAMPLES) {
+            if ((ampl >= f->ampl_avg && !area_drop) || f->lift_samples >= MXT_LIFT_MAX_SAMPLES) {
                 f->lift_buffering = false;
             }
             f->ampl_sum += ampl;
