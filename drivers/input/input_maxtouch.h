@@ -12,6 +12,7 @@ struct mxt_finger {
     int16_t x, y;
     int16_t down_x, down_y;
     bool merged;        // Kontaktflaeche so gross, dass es zwei verschmolzene Finger sind
+    uint8_t down_area;  // Flaeche beim Aufsetzen, Referenz fuer das Wachstum
     // Abhebe-Erkennung (wie im QMK-Treiber des Autors): faellt die Amplitude um >10 %,
     // wird die Bewegung zurueckgehalten und beim Abheben verworfen.
     int32_t ampl_sum;

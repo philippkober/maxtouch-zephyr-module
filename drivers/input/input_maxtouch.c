@@ -54,9 +54,12 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_TAP2_IGNORE_MOVE_MS 250 // so kurze Zwei-Finger-Tips zaehlen trotz Schwerpunktsprung
 #define MXT_TAP_MAX_MOVE 80     // Tap: Bewegung kleiner als das (~1.6 mm)
 #define MXT_TAP2_MAX_MOVE 160   // Zwei-Finger-Tap: Schwerpunkt springt beim Aufsetzen staerker
-#define MXT_MERGED_AREA 24      // Flaeche ab der ein Touch als zwei verschmolzene Finger gilt.
-                                // Mit der duennen Platte erreicht ein einzelner Finger bis 18,
-                                // daher hoch angesetzt (der Chip trennt zwei Finger jetzt gut).
+// Zwei nah beieinander liegende Finger verschmelzen im Chip zu einem Touch. Erkennung ueber
+// die Kontaktflaeche: ab 24 immer, ab 16 nur wenn sie gegenueber dem Aufsetzen um die Haelfte
+// gewachsen ist (ein einzelner Finger waechst beim festeren Druck deutlich weniger).
+#define MXT_MERGED_AREA 24
+#define MXT_MERGED_AREA_MIN 16
+#define MXT_MERGED_GROWTH_NUM 3 // Faktor 3/2
 #define MXT_JUMP_LIMIT 170      // groessere Spruenge pro Messung = Trennen/Verschmelzen, verwerfen
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
 #define MXT_CURSOR_START_MOVE 48 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
@@ -100,6 +103,13 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         return;
     }
     bool merged = area >= MXT_MERGED_AREA;
+    {
+        struct mxt_finger *mf = &data->fingers[idx];
+        if (!merged && area >= MXT_MERGED_AREA_MIN && mf->down_area &&
+            area * 2 >= mf->down_area * MXT_MERGED_GROWTH_NUM) {
+            merged = true;
+        }
+    }
     struct mxt_finger *f = &data->fingers[idx];
     int16_t x = (int16_t)x_pos, y = (int16_t)y_pos;
     uint32_t now = k_uptime_get_32();
@@ -115,6 +125,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         f->x = f->down_x = x;
         f->y = f->down_y = y;
         f->merged = merged;
+        f->down_area = area;
         f->ampl_sum = 0;
         f->ampl_cnt = 0;
         f->ampl_avg = 0;
