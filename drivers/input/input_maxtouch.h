@@ -38,6 +38,8 @@ struct mxt_data {
     struct k_work_delayable momentum_work;
     bool momentum_active;
     int16_t gesture_dx, gesture_dy; // Gesamtweg des fuehrenden Fingers (fuer Wischgesten)
+    bool skip_delta;   // naechste Messung verwerfen (Position springt beim Fingerwechsel)
+    bool swipe_fired;  // Wischgeste in dieser Beruehrung bereits ausgeloest
     bool cursor_started; // Cursor laeuft erst nach Wartezeit/Mindestweg, Bewegung davor wird verworfen
     struct k_work_delayable click_release_work;
     uint16_t click_button;

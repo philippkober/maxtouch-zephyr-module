@@ -78,6 +78,11 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_BTN_SWIPE_RIGHT INPUT_BTN_6
 #define MXT_BTN_SWIPE_UP INPUT_BTN_7
 #define MXT_BTN_SWIPE_DOWN INPUT_BTN_8
+// Zwei-Finger-Wischer quer: wie am Mac Seite zurueck/vor
+#define MXT_BTN_PAGE_BACK INPUT_BTN_9
+#define MXT_BTN_PAGE_FORWARD INPUT_BTN_SELECT
+#define MXT_FLICK_DIST 600       // ~12 mm Mindestweg fuer den Seitenwechsel
+#define MXT_FLICK_MAX_MS 400
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
 // Momentum: nach dem Abheben laeuft das Scrollen mit abnehmender Geschwindigkeit aus
@@ -192,6 +197,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         f->y = f->down_y = y;
         f->merged = merged;
         f->down_area = area;
+        data->skip_delta = true; // Position des fuehrenden Fingers springt beim Aufsetzen
         f->ampl_sum = 0;
         f->ampl_cnt = 0;
         f->ampl_avg = 0;
@@ -206,6 +212,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             data->scroll_acc_x = data->scroll_acc_y = 0;
             data->scroll_last_ms = now;
             data->gesture_dx = data->gesture_dy = 0;
+            data->swipe_fired = false;
             data->cursor_started = false;
             if (data->button_held && data->click_button == INPUT_BTN_0) {
                 // Tap-and-Drag: Finger kam zurueck, solange die Taste noch gehalten wird
@@ -229,10 +236,12 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         if (merged && data->gesture_max_fingers < 2) {
             data->gesture_max_fingers = 2; // verschmolzene Finger: Scroll-Geste, kein Cursor
         }
-        if (merge_changed || mxt_abs16(dx) > MXT_JUMP_LIMIT || mxt_abs16(dy) > MXT_JUMP_LIMIT) {
-            // Position springt beim Trennen/Verschmelzen: diese Messung nicht verwenden
+        if (merge_changed || data->skip_delta || mxt_abs16(dx) > MXT_JUMP_LIMIT ||
+            mxt_abs16(dy) > MXT_JUMP_LIMIT) {
+            // Position springt beim Trennen/Verschmelzen und bei jedem Fingerwechsel
             dx = 0;
             dy = 0;
+            data->skip_delta = false;
         }
         uint8_t n = __builtin_popcount(data->active_mask);
         uint8_t lowest = __builtin_ctz(data->active_mask);
@@ -295,6 +304,8 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             data->gesture_dx += dx;
             data->gesture_dy += dy;
         } else if (idx == lowest && data->gesture_max_fingers <= 2 && (n >= 2 || merged)) {
+            data->gesture_dx += dx;
+            data->gesture_dy += dy;
             // Zwei Finger (getrennt oder verschmolzen): Bewegung des ersten Fingers wird zu
             // Scroll-Schritten
             uint32_t dt = now - data->scroll_last_ms;
@@ -316,6 +327,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         }
         f->active = false;
         data->active_mask &= ~BIT(idx);
+        data->skip_delta = true; // ... und beim Abheben eines von mehreren Fingern
         if (data->active_mask == 0) {
             uint32_t dur = now - data->gesture_start_ms;
             if (data->dragging) {
@@ -341,6 +353,15 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 } else if (!data->gesture_moved && dur <= MXT_TAP2_MAX_MS) {
                     mxt_click(dev, INPUT_BTN_2); // Drei-Finger-Tap = Mittelklick
                 }
+            } else if (data->gesture_max_fingers == 2 && !data->swipe_fired &&
+                       dur <= MXT_FLICK_MAX_MS &&
+                       mxt_abs16(data->gesture_dx) >= MXT_FLICK_DIST &&
+                       mxt_abs16(data->gesture_dy) * 3 < mxt_abs16(data->gesture_dx)) {
+                // Zwei Finger schnell quer: Seite zurueck/vor (wie am Mac)
+                data->swipe_fired = true;
+                LOG_INF("gesture: page %s (dx=%d dur=%u)",
+                        data->gesture_dx > 0 ? "back" : "forward", data->gesture_dx, dur);
+                mxt_click(dev, data->gesture_dx > 0 ? MXT_BTN_PAGE_BACK : MXT_BTN_PAGE_FORWARD);
             } else if (config->scroll_momentum && data->gesture_max_fingers >= 2 &&
                        data->gesture_moved &&
                        (mxt_abs32(data->scroll_vel_x) + mxt_abs32(data->scroll_vel_y)) >=
