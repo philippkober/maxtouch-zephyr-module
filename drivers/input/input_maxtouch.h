@@ -32,6 +32,11 @@ struct mxt_data {
     uint32_t gesture_start_ms;
     bool gesture_moved;
     int16_t scroll_acc_x, scroll_acc_y;
+    // Auslaufendes Scrollen (Momentum) nach dem Abheben
+    int32_t scroll_vel_x, scroll_vel_y; // Counts pro Sekunde, geglaettet
+    uint32_t scroll_last_ms;
+    struct k_work_delayable momentum_work;
+    bool momentum_active;
     bool cursor_started; // Cursor laeuft erst nach Wartezeit/Mindestweg, Bewegung davor wird verworfen
     struct k_work_delayable click_release_work;
     uint16_t click_button;
@@ -93,6 +98,8 @@ struct mxt_config {
     const uint8_t move_hyst_next;
     const uint8_t confthr;
     const uint8_t move_smooth;
+    const uint8_t merge_threshold;
+    const uint8_t merge_hysteresis;
     const bool shieldless_enable;
     const bool diag_dump;
     const uint8_t touch_threshold;

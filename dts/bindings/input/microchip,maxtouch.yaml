@@ -108,3 +108,11 @@ properties:
     type: int
     default: 0
     description: T100 MOVSMOOTH, smoothing applied to slow movements (tails off at higher speeds).
+  merge-threshold:
+    type: int
+    default: 5
+    description: T100 MRGTHR, lower values make the controller separate nearby touches more readily.
+  merge-hysteresis:
+    type: int
+    default: 10
+    description: T100 MRGHYST, hysteresis for the merge threshold.

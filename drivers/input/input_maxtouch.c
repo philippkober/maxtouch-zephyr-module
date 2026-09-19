@@ -72,7 +72,61 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_LIFT_MAX_SAMPLES 5  // danach normal weiterbewegen (max. ~5 Messungen Verzug)
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
+// Momentum: nach dem Abheben laeuft das Scrollen mit abnehmender Geschwindigkeit aus
+#define MXT_MOMENTUM_TICK_MS 25
+#define MXT_MOMENTUM_DECAY_NUM 15   // pro Tick x 15/16 (~halbiert nach ca. 0.27 s)
+#define MXT_MOMENTUM_DECAY_DEN 16
+#define MXT_MOMENTUM_MIN_VEL 300    // Counts/s: darunter stoppen
+#define MXT_MOMENTUM_START_VEL 600  // Counts/s: ab dieser Abhebegeschwindigkeit auslaufen lassen
+#define MXT_MOMENTUM_MAX_MS 3000
+
 static inline int16_t mxt_abs16(int16_t v) { return v < 0 ? -v : v; }
+static inline int32_t mxt_abs32(int32_t v) { return v < 0 ? -v : v; }
+
+static void mxt_emit_scroll(const struct device *dev, int16_t dx, int16_t dy) {
+    struct mxt_data *data = dev->data;
+    data->scroll_acc_y += dy;
+    data->scroll_acc_x += dx;
+    int16_t vs = data->scroll_acc_y / MXT_SCROLL_DIV;
+    int16_t hs = data->scroll_acc_x / MXT_SCROLL_DIV;
+    if (vs != 0) {
+        data->scroll_acc_y -= vs * MXT_SCROLL_DIV;
+        // vertikale Richtung invertiert (Inhalt folgt den Fingern)
+        input_report_rel(dev, INPUT_REL_WHEEL, -vs, hs == 0, K_NO_WAIT);
+    }
+    if (hs != 0) {
+        data->scroll_acc_x -= hs * MXT_SCROLL_DIV;
+        input_report_rel(dev, INPUT_REL_HWHEEL, hs, true, K_NO_WAIT);
+    }
+}
+
+static void mxt_momentum_stop(struct mxt_data *data) {
+    if (data->momentum_active) {
+        data->momentum_active = false;
+        k_work_cancel_delayable(&data->momentum_work);
+        LOG_INF("gesture: momentum stop");
+    }
+    data->scroll_vel_x = data->scroll_vel_y = 0;
+}
+
+static void mxt_momentum_work_cb(struct k_work *work) {
+    struct k_work_delayable *dwork = k_work_delayable_from_work(work);
+    struct mxt_data *data = CONTAINER_OF(dwork, struct mxt_data, momentum_work);
+    if (!data->momentum_active) {
+        return;
+    }
+    int16_t dx = (int16_t)(data->scroll_vel_x * MXT_MOMENTUM_TICK_MS / 1000);
+    int16_t dy = (int16_t)(data->scroll_vel_y * MXT_MOMENTUM_TICK_MS / 1000);
+    mxt_emit_scroll(data->dev, dx, dy);
+    data->scroll_vel_x = data->scroll_vel_x * MXT_MOMENTUM_DECAY_NUM / MXT_MOMENTUM_DECAY_DEN;
+    data->scroll_vel_y = data->scroll_vel_y * MXT_MOMENTUM_DECAY_NUM / MXT_MOMENTUM_DECAY_DEN;
+    if (mxt_abs32(data->scroll_vel_x) + mxt_abs32(data->scroll_vel_y) < MXT_MOMENTUM_MIN_VEL) {
+        data->momentum_active = false;
+        LOG_INF("gesture: momentum end");
+        return;
+    }
+    k_work_schedule(dwork, K_MSEC(MXT_MOMENTUM_TICK_MS));
+}
 
 static void mxt_button_release(struct mxt_data *data) {
     if (data->button_held) {
@@ -122,6 +176,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
 
     switch (ev) {
     case DOWN: {
+        mxt_momentum_stop(data); // neue Beruehrung stoppt das Auslaufen sofort
         bool first = (data->active_mask == 0);
         f->active = true;
         f->x = f->down_x = x;
@@ -140,6 +195,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             data->gesture_max_fingers = 0;
             data->gesture_moved = false;
             data->scroll_acc_x = data->scroll_acc_y = 0;
+            data->scroll_last_ms = now;
             data->cursor_started = false;
             if (data->button_held && data->click_button == INPUT_BTN_0) {
                 // Tap-and-Drag: Finger kam zurueck, solange die Taste noch gehalten wird
@@ -227,22 +283,16 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         } else if (idx == lowest && (n >= 2 || merged)) {
             // Zwei Finger (getrennt oder verschmolzen): Bewegung des ersten Fingers wird zu
             // Scroll-Schritten
-            data->scroll_acc_y += dy;
-            data->scroll_acc_x += dx;
-            int16_t vs = data->scroll_acc_y / MXT_SCROLL_DIV;
-            int16_t hs = data->scroll_acc_x / MXT_SCROLL_DIV;
-            if (vs != 0) {
-                data->scroll_acc_y -= vs * MXT_SCROLL_DIV;
-                // vertikale Richtung invertiert (Wunsch: Inhalt folgt den Fingern)
-                input_report_rel(dev, INPUT_REL_WHEEL, -vs, hs == 0, K_NO_WAIT);
+            uint32_t dt = now - data->scroll_last_ms;
+            data->scroll_last_ms = now;
+            if (dt > 0 && dt < 200) {
+                // Geschwindigkeit glaetten (Counts/s), Basis fuers Auslaufen nach dem Abheben
+                int32_t vx = (int32_t)dx * 1000 / (int32_t)dt;
+                int32_t vy = (int32_t)dy * 1000 / (int32_t)dt;
+                data->scroll_vel_x = (data->scroll_vel_x * 3 + vx) / 4;
+                data->scroll_vel_y = (data->scroll_vel_y * 3 + vy) / 4;
             }
-            if (hs != 0) {
-                data->scroll_acc_x -= hs * MXT_SCROLL_DIV;
-                input_report_rel(dev, INPUT_REL_HWHEEL, hs, true, K_NO_WAIT);
-            }
-            if (vs != 0 || hs != 0) {
-                LOG_INF("gesture: scroll v=%d h=%d (fingers=%d)", vs, hs, n);
-            }
+            mxt_emit_scroll(dev, dx, dy);
         }
         break;
     }
@@ -262,6 +312,15 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 if (second_tap) {
                     mxt_click(dev, INPUT_BTN_0); // Doppelklick
                 }
+            } else if (data->gesture_max_fingers >= 2 && data->gesture_moved &&
+                       (mxt_abs32(data->scroll_vel_x) + mxt_abs32(data->scroll_vel_y)) >=
+                           MXT_MOMENTUM_START_VEL &&
+                       (now - data->scroll_last_ms) < 100) {
+                // Scroll-Geste mit Schwung: auslaufen lassen
+                data->momentum_active = true;
+                LOG_INF("gesture: momentum start vx=%d vy=%d", data->scroll_vel_x,
+                        data->scroll_vel_y);
+                k_work_schedule(&data->momentum_work, K_MSEC(MXT_MOMENTUM_TICK_MS));
             } else {
                 uint32_t max_ms = data->gesture_max_fingers >= 2 ? MXT_TAP2_MAX_MS : MXT_TAP_MAX_MS;
                 LOG_INF("gesture: end fingers=%d moved=%d dur=%u", data->gesture_max_fingers,
@@ -690,8 +749,8 @@ static int mxt_load_config(const struct device *dev,
         t100_conf.tchhyst = config->touch_hysteresis;
         t100_conf.intthr = config->internal_touch_threshold;
         t100_conf.intthryst = config->internal_touch_hysteresis;
-        t100_conf.mrgthr = 2;           // Merge threshold: kleiner = zwei nahe Finger trennen leichter
-        t100_conf.mrghyst = 5;          // Merge threshold hysteresis
+        t100_conf.mrgthr = config->merge_threshold;   // kleiner = nahe Finger trennen leichter
+        t100_conf.mrghyst = config->merge_hysteresis;
         t100_conf.mrgthradjstr = 20;
         t100_conf.movsmooth = config->move_smooth; // Glaettung bei langsamen Bewegungen
         t100_conf.movfilter = 0;        // The lower 4 bits are the speed response value, higher
@@ -932,6 +991,7 @@ static int mxt_init(const struct device *dev) {
     k_timer_init(&data->poll_timer, mxt_poll_timer_cb, NULL);
     k_timer_user_data_set(&data->poll_timer, data);
 
+    k_work_init_delayable(&data->momentum_work, mxt_momentum_work_cb);
     k_work_init_delayable(&data->click_release_work, mxt_click_release_cb);
     k_work_init_delayable(&data->recal_work, mxt_recal_work_cb);
     k_work_init_delayable(&data->diag_work, mxt_diag_work_cb);
@@ -964,6 +1024,8 @@ static int mxt_init(const struct device *dev) {
         .move_hyst_next = DT_INST_PROP(n, move_hysteresis_next),                                    \
         .confthr = DT_INST_PROP(n, confthr),                                                        \
         .move_smooth = DT_INST_PROP(n, move_smooth),                                                \
+        .merge_threshold = DT_INST_PROP(n, merge_threshold),                                        \
+        .merge_hysteresis = DT_INST_PROP(n, merge_hysteresis),                                      \
         .shieldless_enable = DT_INST_PROP(n, shieldless_enable),                                    \
         .diag_dump = DT_INST_PROP(n, diag_dump),                                                    \
         .touch_threshold = DT_INST_PROP_OR(n, touch_threshold, 18),                                     \
