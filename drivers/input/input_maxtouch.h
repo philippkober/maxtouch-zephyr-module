@@ -37,6 +37,7 @@ struct mxt_data {
     uint32_t scroll_last_ms;
     struct k_work_delayable momentum_work;
     bool momentum_active;
+    int16_t gesture_dx, gesture_dy; // Gesamtweg des fuehrenden Fingers (fuer Wischgesten)
     bool cursor_started; // Cursor laeuft erst nach Wartezeit/Mindestweg, Bewegung davor wird verworfen
     struct k_work_delayable click_release_work;
     uint16_t click_button;

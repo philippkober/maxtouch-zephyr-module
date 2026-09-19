@@ -70,6 +70,14 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_LIFT_DROP_PCT 80    // Amplitude unter 80 % des Mittels = moegliches Abheben
 #define MXT_LIFT_AREA_PCT 75    // ... oder Flaeche unter 75 % der Flaeche beim Aufsetzen
 #define MXT_LIFT_MAX_SAMPLES 5  // danach normal weiterbewegen (max. ~5 Messungen Verzug)
+// Wischgesten mit drei Fingern. Die Codes BTN_5..BTN_8 wertet ZMK nicht als Maustasten,
+// sie werden im Keymap ueber zip_button_behaviors auf Tastenkuerzel gelegt.
+#define MXT_SWIPE_DIST 300       // ~6 mm Mindestweg
+#define MXT_SWIPE_MAX_MS 700
+#define MXT_BTN_SWIPE_LEFT INPUT_BTN_5
+#define MXT_BTN_SWIPE_RIGHT INPUT_BTN_6
+#define MXT_BTN_SWIPE_UP INPUT_BTN_7
+#define MXT_BTN_SWIPE_DOWN INPUT_BTN_8
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
 // Momentum: nach dem Abheben laeuft das Scrollen mit abnehmender Geschwindigkeit aus
@@ -145,7 +153,7 @@ static void mxt_click_release_cb(struct k_work *work) {
 
 static void mxt_click(const struct device *dev, uint16_t code) {
     struct mxt_data *data = dev->data;
-    LOG_INF("gesture: click button %s", code == INPUT_BTN_0 ? "left" : "right");
+    LOG_INF("gesture: button 0x%x", code);
     data->click_button = code;
     data->button_held = true;
     input_report_key(dev, code, 1, true, K_NO_WAIT);
@@ -197,6 +205,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             data->gesture_moved = false;
             data->scroll_acc_x = data->scroll_acc_y = 0;
             data->scroll_last_ms = now;
+            data->gesture_dx = data->gesture_dy = 0;
             data->cursor_started = false;
             if (data->button_held && data->click_button == INPUT_BTN_0) {
                 // Tap-and-Drag: Finger kam zurueck, solange die Taste noch gehalten wird
@@ -281,7 +290,11 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 input_report_rel(dev, INPUT_REL_X, dx, false, K_NO_WAIT);
                 input_report_rel(dev, INPUT_REL_Y, dy, true, K_NO_WAIT);
             }
-        } else if (idx == lowest && (n >= 2 || merged)) {
+        } else if (idx == lowest && data->gesture_max_fingers >= 3) {
+            // Drei Finger: nur den Weg sammeln, Auswertung als Wischgeste beim Abheben
+            data->gesture_dx += dx;
+            data->gesture_dy += dy;
+        } else if (idx == lowest && data->gesture_max_fingers <= 2 && (n >= 2 || merged)) {
             // Zwei Finger (getrennt oder verschmolzen): Bewegung des ersten Fingers wird zu
             // Scroll-Schritten
             uint32_t dt = now - data->scroll_last_ms;
@@ -312,6 +325,21 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 mxt_button_release(data);
                 if (second_tap) {
                     mxt_click(dev, INPUT_BTN_0); // Doppelklick
+                }
+            } else if (data->gesture_max_fingers >= 3) {
+                int16_t adx = mxt_abs16(data->gesture_dx), ady = mxt_abs16(data->gesture_dy);
+                LOG_INF("gesture: 3-finger end dx=%d dy=%d dur=%u", data->gesture_dx,
+                        data->gesture_dy, dur);
+                if (dur <= MXT_SWIPE_MAX_MS && (adx >= MXT_SWIPE_DIST || ady >= MXT_SWIPE_DIST)) {
+                    if (adx >= ady) {
+                        mxt_click(dev, data->gesture_dx < 0 ? MXT_BTN_SWIPE_LEFT
+                                                            : MXT_BTN_SWIPE_RIGHT);
+                    } else {
+                        mxt_click(dev, data->gesture_dy < 0 ? MXT_BTN_SWIPE_UP
+                                                            : MXT_BTN_SWIPE_DOWN);
+                    }
+                } else if (!data->gesture_moved && dur <= MXT_TAP2_MAX_MS) {
+                    mxt_click(dev, INPUT_BTN_2); // Drei-Finger-Tap = Mittelklick
                 }
             } else if (config->scroll_momentum && data->gesture_max_fingers >= 2 &&
                        data->gesture_moved &&
