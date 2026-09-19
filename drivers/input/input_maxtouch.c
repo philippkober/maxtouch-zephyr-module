@@ -60,7 +60,8 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_MERGED_AREA 24
 #define MXT_MERGED_AREA_MIN 16
 #define MXT_MERGED_GROWTH_NUM 3 // Faktor 3/2
-#define MXT_JUMP_LIMIT 170      // groessere Spruenge pro Messung = Trennen/Verschmelzen, verwerfen
+#define MXT_JUMP_LIMIT 400      // ~8 mm pro Messung; kleiner verwarf schnelle Wischer
+#define MXT_FAST_MOVE 20        // ab dieser Schrittweite keine Abhebe-Pufferung (Sprungquelle)
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
 #define MXT_CURSOR_START_MOVE 48 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
 #define MXT_SCROLL_DIV 120      // Counts pro Scroll-Schritt (~2.4 mm Fingerweg)
@@ -68,7 +69,7 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 // zurueckgehaltene Bewegung als Sprung nachgeliefert (Log: bis zu 211 Counts am Stueck).
 #define MXT_LIFT_DROP_PCT 80    // Amplitude unter 80 % des Mittels = moegliches Abheben
 #define MXT_LIFT_AREA_PCT 75    // ... oder Flaeche unter 75 % der Flaeche beim Aufsetzen
-#define MXT_LIFT_MAX_SAMPLES 8  // danach normal weiterbewegen (max. ~8 Messungen Verzug)
+#define MXT_LIFT_MAX_SAMPLES 5  // danach normal weiterbewegen (max. ~5 Messungen Verzug)
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
 
 static inline int16_t mxt_abs16(int16_t v) { return v < 0 ? -v : v; }
@@ -186,15 +187,17 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 break;
             }
             // Abhebe-Erkennung: Amplitude deutlich unter dem Mittel -> Bewegung zurueckhalten
-            bool ampl_drop = f->ampl_avg && ampl * 100 < f->ampl_avg * MXT_LIFT_DROP_PCT;
-            bool area_drop = f->down_area && area * 100 < f->down_area * MXT_LIFT_AREA_PCT;
+            bool fast = (mxt_abs16(dx) + mxt_abs16(dy)) > MXT_FAST_MOVE;
+            bool ampl_drop = !fast && f->ampl_avg && ampl * 100 < f->ampl_avg * MXT_LIFT_DROP_PCT;
+            bool area_drop = !fast && f->down_area && area * 100 < f->down_area * MXT_LIFT_AREA_PCT;
             if (ampl_drop || area_drop) {
                 if (!f->lift_buffering) {
                     f->lift_buffering = true;
                     f->lift_samples = 0;
                 }
             }
-            if ((ampl >= f->ampl_avg && !area_drop) || f->lift_samples >= MXT_LIFT_MAX_SAMPLES) {
+            if (fast || (ampl >= f->ampl_avg && !area_drop) ||
+                f->lift_samples >= MXT_LIFT_MAX_SAMPLES) {
                 f->lift_buffering = false;
             }
             f->ampl_sum += ampl;
