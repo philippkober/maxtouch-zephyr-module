@@ -100,6 +100,7 @@ struct mxt_config {
     const uint8_t move_smooth;
     const uint8_t merge_threshold;
     const uint8_t merge_hysteresis;
+    const bool scroll_momentum;
     const bool shieldless_enable;
     const bool diag_dump;
     const uint8_t touch_threshold;

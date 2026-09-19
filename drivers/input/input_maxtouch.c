@@ -155,6 +155,7 @@ static void mxt_click(const struct device *dev, uint16_t code) {
 static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_touch_event ev,
                               uint16_t x_pos, uint16_t y_pos, uint8_t ampl, uint8_t area) {
     struct mxt_data *data = dev->data;
+    const struct mxt_config *config = dev->config;
     if (idx >= MXT_MAX_FINGERS || !data->ready) {
         return;
     }
@@ -312,7 +313,8 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                 if (second_tap) {
                     mxt_click(dev, INPUT_BTN_0); // Doppelklick
                 }
-            } else if (data->gesture_max_fingers >= 2 && data->gesture_moved &&
+            } else if (config->scroll_momentum && data->gesture_max_fingers >= 2 &&
+                       data->gesture_moved &&
                        (mxt_abs32(data->scroll_vel_x) + mxt_abs32(data->scroll_vel_y)) >=
                            MXT_MOMENTUM_START_VEL &&
                        (now - data->scroll_last_ms) < 100) {
@@ -1026,6 +1028,7 @@ static int mxt_init(const struct device *dev) {
         .move_smooth = DT_INST_PROP(n, move_smooth),                                                \
         .merge_threshold = DT_INST_PROP(n, merge_threshold),                                        \
         .merge_hysteresis = DT_INST_PROP(n, merge_hysteresis),                                      \
+        .scroll_momentum = DT_INST_PROP(n, scroll_momentum),                                        \
         .shieldless_enable = DT_INST_PROP(n, shieldless_enable),                                    \
         .diag_dump = DT_INST_PROP(n, diag_dump),                                                    \
         .touch_threshold = DT_INST_PROP_OR(n, touch_threshold, 18),                                     \

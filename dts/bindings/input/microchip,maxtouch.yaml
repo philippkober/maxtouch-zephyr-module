@@ -116,3 +116,6 @@ properties:
     type: int
     default: 10
     description: T100 MRGHYST, hysteresis for the merge threshold.
+  scroll-momentum:
+    type: boolean
+    description: Keep scrolling with decaying speed after lifting two fingers (cancelled by a new touch).
