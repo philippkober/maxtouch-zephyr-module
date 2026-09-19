@@ -70,17 +70,14 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_LIFT_DROP_PCT 80    // Amplitude unter 80 % des Mittels = moegliches Abheben
 #define MXT_LIFT_AREA_PCT 75    // ... oder Flaeche unter 75 % der Flaeche beim Aufsetzen
 #define MXT_LIFT_MAX_SAMPLES 5  // danach normal weiterbewegen (max. ~5 Messungen Verzug)
-// Wischgesten mit drei Fingern. Die Codes BTN_5..BTN_8 wertet ZMK nicht als Maustasten,
-// sie werden im Keymap ueber zip_button_behaviors auf Tastenkuerzel gelegt.
+// Wischgesten. Nur echte Maustasten (BTN_0..BTN_4) verwenden: Tastenverhalten ueber
+// zip_button_behaviors auszuloesen liess bei einem per Split angebundenen Trackpad beide
+// Haelften abstuerzen.
 #define MXT_SWIPE_DIST 300       // ~6 mm Mindestweg
 #define MXT_SWIPE_MAX_MS 700
-#define MXT_BTN_SWIPE_LEFT INPUT_BTN_5
-#define MXT_BTN_SWIPE_RIGHT INPUT_BTN_6
-#define MXT_BTN_SWIPE_UP INPUT_BTN_7
-#define MXT_BTN_SWIPE_DOWN INPUT_BTN_8
-// Zwei-Finger-Wischer quer: wie am Mac Seite zurueck/vor
-#define MXT_BTN_PAGE_BACK INPUT_BTN_9
-#define MXT_BTN_PAGE_FORWARD INPUT_BTN_SELECT
+// Zwei-Finger-Wischer quer = Maustaste 4/5 (Safari: Seite zurueck/vor)
+#define MXT_BTN_PAGE_BACK INPUT_BTN_3
+#define MXT_BTN_PAGE_FORWARD INPUT_BTN_4
 #define MXT_FLICK_DIST 600       // ~12 mm Mindestweg fuer den Seitenwechsel
 #define MXT_FLICK_MAX_MS 400
 #define MXT_CLICK_RELEASE_MS 200 // Taste nach Tap so lange halten: neuer Finger in dieser Zeit = Drag
@@ -339,18 +336,9 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
                     mxt_click(dev, INPUT_BTN_0); // Doppelklick
                 }
             } else if (data->gesture_max_fingers >= 3) {
-                int16_t adx = mxt_abs16(data->gesture_dx), ady = mxt_abs16(data->gesture_dy);
                 LOG_INF("gesture: 3-finger end dx=%d dy=%d dur=%u", data->gesture_dx,
                         data->gesture_dy, dur);
-                if (dur <= MXT_SWIPE_MAX_MS && (adx >= MXT_SWIPE_DIST || ady >= MXT_SWIPE_DIST)) {
-                    if (adx >= ady) {
-                        mxt_click(dev, data->gesture_dx < 0 ? MXT_BTN_SWIPE_LEFT
-                                                            : MXT_BTN_SWIPE_RIGHT);
-                    } else {
-                        mxt_click(dev, data->gesture_dy < 0 ? MXT_BTN_SWIPE_UP
-                                                            : MXT_BTN_SWIPE_DOWN);
-                    }
-                } else if (!data->gesture_moved && dur <= MXT_TAP2_MAX_MS) {
+                if (!data->gesture_moved && dur <= MXT_TAP2_MAX_MS) {
                     mxt_click(dev, INPUT_BTN_2); // Drei-Finger-Tap = Mittelklick
                 }
             } else if (data->gesture_max_fingers == 2 && !data->swipe_fired &&
