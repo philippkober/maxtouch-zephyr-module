@@ -60,7 +60,10 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_MERGED_AREA 24
 #define MXT_MERGED_AREA_MIN 16
 #define MXT_MERGED_GROWTH_NUM 3 // Faktor 3/2
-#define MXT_JUMP_LIMIT 400      // ~8 mm pro Messung; kleiner verwarf schnelle Wischer
+// Naehert sich ein zweiter Finger, verschiebt der Chip den Schwerpunkt des einen gemeldeten
+// Touches um bis zu 340 Counts in einer Messung (im Log belegt), bevor er ihn als eigenen
+// Finger meldet. Genau diese Spruenge muessen raus, ohne schnelle Wischer abzuschneiden.
+#define MXT_JUMP_LIMIT 150      // ~3 mm pro Messung = ~380 mm/s Fingergeschwindigkeit
 #define MXT_FAST_MOVE 20        // ab dieser Schrittweite keine Abhebe-Pufferung (Sprungquelle)
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
 #define MXT_CURSOR_START_MOVE 48 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
