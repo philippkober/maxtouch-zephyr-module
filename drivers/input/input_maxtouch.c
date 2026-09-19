@@ -474,11 +474,19 @@ static void mxt_report_data(const struct device *dev) {
 
 static void mxt_work_cb(struct k_work *work) {
     struct mxt_data *data = CONTAINER_OF(work, struct mxt_data, work);
+    const struct mxt_config *config = data->dev->config;
     mxt_report_data(data->dev);
+    if (data->irq_mode) {
+        // Pegel-Interrupt: CHG bleibt low solange Nachrichten anstehen, deshalb erst nach
+        // dem Leeren wieder scharf schalten.
+        gpio_pin_interrupt_configure_dt(&config->chg, GPIO_INT_LEVEL_ACTIVE);
+    }
 }
 
 static void mxt_gpio_cb(const struct device *port, struct gpio_callback *cb, uint32_t pins) {
     struct mxt_data *data = CONTAINER_OF(cb, struct mxt_data, gpio_cb);
+    const struct mxt_config *config = data->dev->config;
+    gpio_pin_interrupt_configure_dt(&config->chg, GPIO_INT_DISABLE);
     k_work_submit(&data->work);
 }
 
@@ -840,6 +848,7 @@ static int mxt_load_config(const struct device *dev,
     return 0;
 }
 
+#define MXT_SAFETY_POLL_MS 500  // Sicherheitsnetz im Interrupt-Betrieb
 #define MXT_INIT_RETRY_MS 500
 #define MXT_INIT_FIRST_DELAY_MS 500
 #define MXT_RECAL_DELAY_MS 3000
@@ -1008,8 +1017,29 @@ static void mxt_init_work_cb(struct k_work *work) {
     mxt_report_data(dev);
     data->ready = true;
 
-    k_timer_start(&data->poll_timer, K_MSEC(8), K_MSEC(8));
-    LOG_INF("maxtouch config loaded, polling every 8ms");
+    if (config->chg.port && device_is_ready(config->chg.port)) {
+        gpio_init_callback(&data->gpio_cb, mxt_gpio_cb, BIT(config->chg.pin));
+        ret = gpio_add_callback(config->chg.port, &data->gpio_cb);
+        if (ret == 0) {
+            ret = gpio_pin_interrupt_configure_dt(&config->chg, GPIO_INT_LEVEL_ACTIVE);
+        }
+        if (ret == 0) {
+            data->irq_mode = true;
+        } else {
+            LOG_WRN("CHG interrupt not usable (%d), falling back to polling", ret);
+        }
+    }
+
+    if (data->irq_mode) {
+        // Der Chip meldet sich ueber CHG. Der langsame Timer ist nur ein Sicherheitsnetz,
+        // falls eine Flanke verloren geht; das spart gegenueber 8-ms-Polling viel Strom.
+        k_timer_start(&data->poll_timer, K_MSEC(MXT_SAFETY_POLL_MS), K_MSEC(MXT_SAFETY_POLL_MS));
+        LOG_INF("maxtouch config loaded, CHG interrupt mode (safety poll %dms)",
+                MXT_SAFETY_POLL_MS);
+    } else {
+        k_timer_start(&data->poll_timer, K_MSEC(8), K_MSEC(8));
+        LOG_INF("maxtouch config loaded, polling every 8ms");
+    }
     k_work_schedule(&data->recal_work, K_MSEC(MXT_RECAL_DELAY_MS));
 }
 
@@ -1024,6 +1054,7 @@ static int mxt_init(const struct device *dev) {
             MXT_INIT_FIRST_DELAY_MS);
 
     gpio_pin_configure_dt(&config->chg, GPIO_INPUT);
+    // Interrupt wird erst nach dem Konfigurieren des Chips scharf geschaltet
     ret = gpio_pin_interrupt_configure_dt(&config->chg, GPIO_INT_DISABLE);
     if (ret < 0) {
         LOG_ERR("Failed to configure interrupt for CHG pin %d", ret);

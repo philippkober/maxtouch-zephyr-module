@@ -43,6 +43,7 @@ struct mxt_data {
     bool cursor_started; // Cursor laeuft erst nach Wartezeit/Mindestweg, Bewegung davor wird verworfen
     struct k_work_delayable click_release_work;
     uint16_t click_button;
+    bool irq_mode;      // CHG-Interrupt statt Dauer-Polling
     bool ready;         // Chip konfiguriert, alte Meldungen verworfen: erst dann Gesten auswerten
     bool button_held;   // Taste gedrueckt (Tap-Release ausstehend oder Drag laeuft)
     bool dragging;      // Tap-and-Drag aktiv
