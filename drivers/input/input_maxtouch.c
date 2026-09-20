@@ -461,6 +461,13 @@ static void mxt_report_data(const struct device *dev) {
                 break;
             }
             (void)pending_for_finger;
+        } else if (msg.report_id == data->t6_command_processor_report_id) {
+            // T6-Status wie im QMK-Treiber dekodieren: zeigt, wann der Chip von sich aus
+            // kalibriert (CAL) und ob Signalfehler/Overflow auftreten.
+            const uint8_t status = msg.data[0];
+            LOG_INF("T6 status: RESET=%d OFL=%d SIGERR=%d CAL=%d CFGERR=%d COMSERR=%d",
+                    (status & BIT(7)) ? 1 : 0, (status & BIT(6)) ? 1 : 0, (status & BIT(5)) ? 1 : 0,
+                    (status & BIT(4)) ? 1 : 0, (status & BIT(3)) ? 1 : 0, (status & BIT(2)) ? 1 : 0);
         } else {
             LOG_HEXDUMP_DBG(msg.data, 5, "message data");
         }
@@ -620,20 +627,22 @@ static int mxt_load_config(const struct device *dev,
         LOG_HEXDUMP_INF(&t8_conf, sizeof(t8_conf), "T8 before");
         memset(&t8_conf, 0, sizeof(t8_conf));
         t8_conf.chrgtime = config->charge_time;
-        // Werte des Builds, der Touch-Messages lieferte. Mit atchcalst=0 (Upstream) bleibt
-        // der Chip nach jeder Kalibrierung unbegrenzt in der Anti-Touch-Pruefung und meldet
-        // keine Touches mehr (T37-Deltas zeigen den Finger trotzdem).
-        t8_conf.tchdrift = 20;  // 4s: mit 5 wurde ein ruhender Finger binnen 1s in die Baseline gezogen
-        t8_conf.driftst = 20;
-        t8_conf.tchautocal = 0;   // keine Recal nach 10s Dauer-Touch (erzeugt Geisterbilder)
-        t8_conf.atchcalst = 5;
+        // Exakt die Werte aus George Nortons QMK-Treiber (drivers/sensors/maxtouch.c,
+        // Zweig multitouch_experiment): der Chip haelt seine Baseline selbst in Ordnung.
+        // Drift-Kompensation bleibt aus (QMK nullt das Feld), stattdessen sorgen
+        // Auto-Recal und Forced Calibration fuer die Erholung nach einer Fehlkalibrierung.
+        t8_conf.tchdrift = 0;
+        t8_conf.driftst = 0;
+        t8_conf.tchautocal = 50;  // 10s: Recal, wenn ein Touch so lange ununterbrochen anliegt
+        t8_conf.atchcalst = 0;    // Anti-Touch-Pruefung dauerhaft aktiv (QMK-Default)
 
-        // Anti-Touch-Pruefung nur im 1s-Fenster nach der Kalibrierung. Forced Calibration
-        // (atchfrccalthr/ratio) aus: die negativen Randnodes eines echten Fingers loesten
-        // sonst Recal-Loops mit Finger auf dem Pad aus (4x CAL in 300ms im Log).
+        // Anti-Touch-Erkennung mit Forced Calibration: erkennt eine verdriftete Baseline
+        // (negative Deltas) und kalibriert neu. War hier abgeschaltet, weil der Luftspalt
+        // unter der losen Folie Recal-Loops ausgeloest hat -- die Folie ist inzwischen
+        // flaechig verklebt, also QMK-Verhalten wieder herstellen.
         t8_conf.atchcalsthr = 50;
-        t8_conf.atchfrccalthr = 0;
-        t8_conf.atchfrccalratio = 0;
+        t8_conf.atchfrccalthr = 50;
+        t8_conf.atchfrccalratio = 25;
         t8_conf.measallow = config->allowed_measurement_types;
 
         ret = mxt_seq_write(dev, data->t8_acquisitionconfig_address, &t8_conf, sizeof(t8_conf));
