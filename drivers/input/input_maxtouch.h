@@ -41,6 +41,10 @@ struct mxt_data {
     bool skip_delta;   // naechste Messung verwerfen (Position springt beim Fingerwechsel)
     bool swipe_fired;  // Wischgeste in dieser Beruehrung bereits ausgeloest
     bool cursor_started; // Cursor laeuft erst nach Wartezeit/Mindestweg, Bewegung davor wird verworfen
+    // Cursor-Takt: der Chip liefert im Free-Run bis zu 300 Messungen/s, die BLE-Split-Strecke
+    // traegt das nicht. Bewegung wird aufsummiert und mit festem Takt abgeschickt.
+    int16_t pend_dx, pend_dy;
+    uint32_t last_report_ms;
     struct k_work_delayable click_release_work;
     uint16_t click_button;
     bool irq_mode;      // CHG-Interrupt statt Dauer-Polling

@@ -65,6 +65,7 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 // Finger meldet. Genau diese Spruenge muessen raus, ohne schnelle Wischer abzuschneiden.
 #define MXT_JUMP_LIMIT 150      // ~3 mm pro Messung = ~380 mm/s Fingergeschwindigkeit
 #define MXT_FAST_MOVE 20        // ab dieser Schrittweite keine Abhebe-Pufferung (Sprungquelle)
+#define MXT_REPORT_INTERVAL_MS 8 // Cursor-Takt: 125 Hz, so viel traegt die BLE-Split-Strecke
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
 #define MXT_CURSOR_START_MOVE 48 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
 #define MXT_SCROLL_DIV 120      // Counts pro Scroll-Schritt (~2.4 mm Fingerweg)
@@ -165,6 +166,28 @@ static void mxt_click(const struct device *dev, uint16_t code) {
     k_work_schedule(&data->click_release_work, K_MSEC(MXT_CLICK_RELEASE_MS));
 }
 
+// Der Chip misst im Free-Run und liefert bis zu 300 Positionen/s. Jede davon wird zu zwei
+// input-Events, die der Split-Peripheral einzeln per GATT-Notification an die linke Haelfte
+// schickt -- mehr als die BLE-Strecke traegt. Sobald die Verbindung nach einer Pause ein
+// langsameres Connection-Interval bekommt, staut sich die Queue: der Zeiger wird langsam und
+// springt. Deshalb wird die Bewegung aufsummiert und nur mit MXT_REPORT_INTERVAL_MS
+// abgeschickt; es geht kein Weg verloren, nur die Paketrate sinkt.
+static void mxt_flush_cursor(const struct device *dev, bool force) {
+    struct mxt_data *data = dev->data;
+    if (data->pend_dx == 0 && data->pend_dy == 0) {
+        return;
+    }
+    uint32_t now = k_uptime_get_32();
+    if (!force && (now - data->last_report_ms) < MXT_REPORT_INTERVAL_MS) {
+        return;
+    }
+    data->last_report_ms = now;
+    input_report_rel(dev, INPUT_REL_X, data->pend_dx, false, K_NO_WAIT);
+    input_report_rel(dev, INPUT_REL_Y, data->pend_dy, true, K_NO_WAIT);
+    data->pend_dx = 0;
+    data->pend_dy = 0;
+}
+
 static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_touch_event ev,
                               uint16_t x_pos, uint16_t y_pos, uint8_t ampl, uint8_t area) {
     struct mxt_data *data = dev->data;
@@ -198,6 +221,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         f->merged = merged;
         f->down_area = area;
         data->skip_delta = true; // Position des fuehrenden Fingers springt beim Aufsetzen
+        data->pend_dx = data->pend_dy = 0;
         f->ampl_sum = 0;
         f->ampl_cnt = 0;
         f->ampl_avg = 0;
@@ -295,10 +319,9 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             dx += f->buf_x;
             dy += f->buf_y;
             f->buf_x = f->buf_y = 0;
-            if (dx != 0 || dy != 0) {
-                input_report_rel(dev, INPUT_REL_X, dx, false, K_NO_WAIT);
-                input_report_rel(dev, INPUT_REL_Y, dy, true, K_NO_WAIT);
-            }
+            data->pend_dx += dx;
+            data->pend_dy += dy;
+            mxt_flush_cursor(dev, false);
         } else if (idx == lowest && data->gesture_max_fingers >= 3) {
             // Drei Finger: nur den Weg sammeln, Auswertung als Wischgeste beim Abheben
             data->gesture_dx += dx;
@@ -322,6 +345,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         break;
     }
     case UP: {
+        mxt_flush_cursor(dev, true); // Restweg nicht bis zur naechsten Beruehrung liegen lassen
         if (!f->active) {
             break; // UP fuer einen Finger, der nicht (mehr) aktiv ist: keine zweite Gestenauswertung
         }
@@ -418,7 +442,7 @@ static void mxt_report_data(const struct device *dev) {
         }
 
         // Diagnose: jede Message roh ausgeben (rid + Daten)
-        LOG_INF("msg rid=%d t100=%d data=%02x %02x %02x %02x %02x %02x", msg.report_id,
+        LOG_DBG("msg rid=%d t100=%d data=%02x %02x %02x %02x %02x %02x", msg.report_id,
                 is_t100_report(dev, msg.report_id), msg.data[0], msg.data[1], msg.data[2],
                 msg.data[3], msg.data[4], msg.data[5]);
 
@@ -432,7 +456,7 @@ static void mxt_report_data(const struct device *dev) {
 
             uint8_t ampl = msg.data[5];
             uint8_t area = msg.data[6];
-            LOG_INF("touch finger=%d ev=%d x=%d y=%d ampl=%d area=%d", finger_idx, ev, x_pos, y_pos,
+            LOG_DBG("touch finger=%d ev=%d x=%d y=%d ampl=%d area=%d", finger_idx, ev, x_pos, y_pos,
                     ampl, area);
             // Alle Event-Typen an die Gesten: schnelle Tipps kommen als DOWNUP,
             // unterdrueckte Finger als SUP/DOWNSUP/UNSUPUP.
