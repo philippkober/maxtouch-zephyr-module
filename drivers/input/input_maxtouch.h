@@ -21,6 +21,8 @@ struct mxt_finger {
     bool lift_buffering;
     uint8_t lift_samples;
     int16_t buf_x, buf_y;
+    uint32_t last_ms;   // Zeitpunkt der letzten Messung, Basis fuer die Sprunggrenze
+    uint8_t jump_skip;  // Sprung erkannt: auch die naechste Messung verwerfen
 };
 
 #define MXT_TRACE_LEN 24

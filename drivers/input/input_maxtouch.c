@@ -61,9 +61,15 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_MERGED_AREA_MIN 16
 #define MXT_MERGED_GROWTH_NUM 3 // Faktor 3/2
 // Naehert sich ein zweiter Finger, verschiebt der Chip den Schwerpunkt des einen gemeldeten
-// Touches um bis zu 340 Counts in einer Messung (im Log belegt), bevor er ihn als eigenen
-// Finger meldet. Genau diese Spruenge muessen raus, ohne schnelle Wischer abzuschneiden.
-#define MXT_JUMP_LIMIT 150      // ~3 mm pro Messung = ~380 mm/s Fingergeschwindigkeit
+// Touches sprunghaft, bevor er ihn als eigenen Finger meldet. Die Traces (siehe
+// mxt_dump_trace) zeigen ~22 ms vor dem zweiten Kontakt eine einzelne Messung mit 117 bis
+// 239 Counts, waehrend echte Bewegung in denselben Aufzeichnungen nie ueber ~43 Counts
+// hinausgeht. Eine feste Grenze von 150 liess die Haelfte dieser Spruenge durch, deshalb
+// wird stattdessen die Geschwindigkeit begrenzt: 2048 Counts entsprechen 42 mm, also
+// 48.8 Counts/mm, und 27 Counts/ms sind rund 550 mm/s -- schneller wischt kein Finger.
+#define MXT_JUMP_SPEED 27       // Counts pro ms (~550 mm/s)
+#define MXT_JUMP_MIN 60         // Untergrenze bei sehr kurzem Messabstand
+#define MXT_JUMP_LIMIT 150      // Obergrenze bei langem Messabstand
 #define MXT_FAST_MOVE 20        // ab dieser Schrittweite keine Abhebe-Pufferung (Sprungquelle)
 #define MXT_REPORT_INTERVAL_MS 8 // Cursor-Takt: 125 Hz, so viel traegt die BLE-Split-Strecke
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
@@ -263,6 +269,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         f->active = true;
         f->x = f->down_x = x;
         f->y = f->down_y = y;
+        f->last_ms = now;
         f->merged = merged;
         f->down_area = area;
         data->skip_delta = true; // Position des fuehrenden Fingers springt beim Aufsetzen
@@ -329,8 +336,16 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             data->gesture_max_fingers = 2; // verschmolzene Finger: Scroll-Geste, kein Cursor
             mxt_drop_cursor(dev);
         }
-        if (merge_changed || data->skip_delta || mxt_abs16(dx) > MXT_JUMP_LIMIT ||
-            mxt_abs16(dy) > MXT_JUMP_LIMIT) {
+        uint32_t jump_dt = now - f->last_ms;
+        f->last_ms = now;
+        int32_t jump_limit = (int32_t)MXT_JUMP_SPEED * (jump_dt == 0 ? 1 : jump_dt);
+        if (jump_limit < MXT_JUMP_MIN) {
+            jump_limit = MXT_JUMP_MIN;
+        } else if (jump_limit > MXT_JUMP_LIMIT) {
+            jump_limit = MXT_JUMP_LIMIT;
+        }
+        if (merge_changed || data->skip_delta || mxt_abs16(dx) > jump_limit ||
+            mxt_abs16(dy) > jump_limit) {
             // Position springt beim Trennen/Verschmelzen und bei jedem Fingerwechsel
             dx = 0;
             dy = 0;
