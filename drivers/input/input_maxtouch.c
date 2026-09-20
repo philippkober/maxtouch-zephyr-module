@@ -293,8 +293,13 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         }
         uint8_t n = __builtin_popcount(data->active_mask) + (merged ? 1 : 0);
         // Waehrend eines Drags bleibt es eine Ein-Finger-Geste: geht der Platz aus, legt man
-        // einen zweiten Finger auf und zieht damit weiter, statt zu scrollen.
-        if (n > data->gesture_max_fingers && !data->dragging) {
+        // einen zweiten Finger auf und zieht damit weiter, statt zu scrollen. Die Zahl wird
+        // dafuer auf 1 gedeckelt -- nicht die Zuweisung unterdrueckt, denn der Drag beginnt
+        // in genau diesem DOWN, und ohne die 1 bliebe die Geste bei 0 und damit ohne Zweig.
+        if (data->dragging && n > 1) {
+            n = 1;
+        }
+        if (n > data->gesture_max_fingers) {
             data->gesture_max_fingers = n;
         }
         break;
