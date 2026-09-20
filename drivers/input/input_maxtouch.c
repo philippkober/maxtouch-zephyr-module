@@ -174,18 +174,41 @@ static void mxt_click(const struct device *dev, uint16_t code) {
 // abgeschickt; es geht kein Weg verloren, nur die Paketrate sinkt.
 static void mxt_flush_cursor(const struct device *dev, bool force) {
     struct mxt_data *data = dev->data;
-    if (data->pend_dx == 0 && data->pend_dy == 0) {
-        return;
-    }
     uint32_t now = k_uptime_get_32();
     if (!force && (now - data->last_report_ms) < MXT_REPORT_INTERVAL_MS) {
         return;
     }
     data->last_report_ms = now;
-    input_report_rel(dev, INPUT_REL_X, data->pend_dx, false, K_NO_WAIT);
-    input_report_rel(dev, INPUT_REL_Y, data->pend_dy, true, K_NO_WAIT);
-    data->pend_dx = 0;
-    data->pend_dy = 0;
+    // Bewegung wird eine Taktstufe zurueckgehalten: naehert sich ein zweiter Finger, laesst
+    // sich die inzwischen gesammelte Schwerpunktverschiebung noch verwerfen, statt sie als
+    // Sprung abzuschicken.
+    int16_t dx = data->hold_dx, dy = data->hold_dy;
+    data->hold_dx = data->pend_dx;
+    data->hold_dy = data->pend_dy;
+    data->pend_dx = data->pend_dy = 0;
+    if (force) {
+        dx += data->hold_dx;
+        dy += data->hold_dy;
+        data->hold_dx = data->hold_dy = 0;
+    }
+    if (dx == 0 && dy == 0) {
+        return;
+    }
+    input_report_rel(dev, INPUT_REL_X, dx, false, K_NO_WAIT);
+    input_report_rel(dev, INPUT_REL_Y, dy, true, K_NO_WAIT);
+}
+
+// Ein zweiter Finger ist aufgetaucht: der Chip hat den Schwerpunkt des einen gemeldeten
+// Touches schon Richtung des neuen Fingers gezogen, bevor er ihn als eigenen Kontakt
+// gemeldet hat. Die noch nicht abgeschickte Bewegung ist genau dieser Ruck -> wegwerfen.
+static void mxt_drop_cursor(const struct device *dev) {
+    struct mxt_data *data = dev->data;
+    if (data->pend_dx || data->pend_dy || data->hold_dx || data->hold_dy) {
+        LOG_INF("gesture: cursor drop at scroll start dx=%d dy=%d",
+                data->pend_dx + data->hold_dx, data->pend_dy + data->hold_dy);
+    }
+    data->pend_dx = data->pend_dy = 0;
+    data->hold_dx = data->hold_dy = 0;
 }
 
 static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_touch_event ev,
@@ -221,7 +244,12 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         f->merged = merged;
         f->down_area = area;
         data->skip_delta = true; // Position des fuehrenden Fingers springt beim Aufsetzen
-        data->pend_dx = data->pend_dy = 0;
+        if (!first) {
+            mxt_drop_cursor(dev); // zweiter Finger: den Anlauf-Ruck nicht abschicken
+        } else {
+            data->pend_dx = data->pend_dy = 0;
+            data->hold_dx = data->hold_dy = 0;
+        }
         f->ampl_sum = 0;
         f->ampl_cnt = 0;
         f->ampl_avg = 0;
@@ -259,6 +287,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         f->merged = merged;
         if (merged && data->gesture_max_fingers < 2) {
             data->gesture_max_fingers = 2; // verschmolzene Finger: Scroll-Geste, kein Cursor
+            mxt_drop_cursor(dev);
         }
         if (merge_changed || data->skip_delta || mxt_abs16(dx) > MXT_JUMP_LIMIT ||
             mxt_abs16(dy) > MXT_JUMP_LIMIT) {

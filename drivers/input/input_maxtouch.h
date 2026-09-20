@@ -44,6 +44,9 @@ struct mxt_data {
     // Cursor-Takt: der Chip liefert im Free-Run bis zu 300 Messungen/s, die BLE-Split-Strecke
     // traegt das nicht. Bewegung wird aufsummiert und mit festem Takt abgeschickt.
     int16_t pend_dx, pend_dy;
+    // Eine Stufe Verzoegerung: was hier liegt, wurde noch nicht abgeschickt und kann
+    // verworfen werden, wenn sich nachtraeglich ein zweiter Finger zeigt.
+    int16_t hold_dx, hold_dy;
     uint32_t last_report_ms;
     struct k_work_delayable click_release_work;
     uint16_t click_button;
