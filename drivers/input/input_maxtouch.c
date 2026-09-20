@@ -446,6 +446,11 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         data->skip_delta = true; // ... und beim Abheben eines von mehreren Fingern
         if (data->active_mask == 0) {
             uint32_t dur = now - data->gesture_start_ms;
+            // Alle Werte, an denen die Flick-Erkennung haengt, einmal pro Geste ausgeben:
+            // damit laesst sich ablesen, welche der vier Bedingungen nicht erfuellt war.
+            LOG_INF("gesture: lift fingers=%d dur=%u dx=%d dy=%d moved=%d swiped=%d drag=%d",
+                    data->gesture_max_fingers, dur, data->gesture_dx, data->gesture_dy,
+                    data->gesture_moved, data->swipe_fired, data->dragging);
             if (data->dragging) {
                 bool second_tap = !data->gesture_moved && dur <= MXT_TAP_MAX_MS &&
                                   data->gesture_max_fingers == 1;
