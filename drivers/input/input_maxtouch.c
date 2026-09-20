@@ -270,6 +270,7 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         f->x = f->down_x = x;
         f->y = f->down_y = y;
         f->last_ms = now;
+        f->jump_skip = 0;
         f->merged = merged;
         f->down_area = area;
         data->skip_delta = true; // Position des fuehrenden Fingers springt beim Aufsetzen
@@ -344,12 +345,15 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         } else if (jump_limit > MXT_JUMP_LIMIT) {
             jump_limit = MXT_JUMP_LIMIT;
         }
-        if (merge_changed || data->skip_delta || mxt_abs16(dx) > jump_limit ||
-            mxt_abs16(dy) > jump_limit) {
-            // Position springt beim Trennen/Verschmelzen und bei jedem Fingerwechsel
+        bool jumped = mxt_abs16(dx) > jump_limit || mxt_abs16(dy) > jump_limit;
+        if (merge_changed || data->skip_delta || jumped || f->jump_skip) {
+            // Position springt beim Trennen/Verschmelzen und bei jedem Fingerwechsel.
+            // Der Ruck kommt laut den Traces als Paar: auf die grosse Messung folgt eine
+            // halb so grosse in die Gegenrichtung, die unter der Grenze bliebe.
             dx = 0;
             dy = 0;
             data->skip_delta = false;
+            f->jump_skip = jumped ? 1 : 0;
         }
         uint8_t n = __builtin_popcount(data->active_mask);
         uint8_t lowest = __builtin_ctz(data->active_mask);
