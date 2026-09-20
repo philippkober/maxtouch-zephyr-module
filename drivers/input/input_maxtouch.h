@@ -32,6 +32,12 @@ struct mxt_data {
     uint32_t gesture_start_ms;
     bool gesture_moved;
     int16_t scroll_acc_x, scroll_acc_y;
+    // Scroll laeuft erst nach einem Mindestweg an: zwei ruhende Finger driften langsam, und
+    // diese Drift darf sich nicht im Scroll-Akku sammeln, bis sie beim Losscrollen als
+    // fertiger Schritt herausfaellt.
+    bool scroll_started;
+    int16_t scroll_start_dx, scroll_start_dy;
+    uint32_t scroll_start_ms;
     // Auslaufendes Scrollen (Momentum) nach dem Abheben
     int32_t scroll_vel_x, scroll_vel_y; // Counts pro Sekunde, geglaettet
     uint32_t scroll_last_ms;

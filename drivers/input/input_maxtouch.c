@@ -69,6 +69,8 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_CURSOR_WAIT_MS 150  // Cursor startet nach dieser Zeit ...
 #define MXT_CURSOR_START_MOVE 48 // ... oder nach ~1 mm Weg; Bewegung davor wird verworfen (QMK)
 #define MXT_SCROLL_DIV 120      // Counts pro Scroll-Schritt (~2.4 mm Fingerweg)
+#define MXT_SCROLL_START_MOVE 40 // Scroll startet nach ~0.8 mm ...
+#define MXT_SCROLL_START_MS 300  // ... die innerhalb dieser Zeit zusammenkommen muessen
 // Abhebe-Erkennung: nur bei deutlichem Amplitudeneinbruch und nur kurz, sonst wird die
 // zurueckgehaltene Bewegung als Sprung nachgeliefert (Log: bis zu 211 Counts am Stueck).
 #define MXT_LIFT_DROP_PCT 80    // Amplitude unter 80 % des Mittels = moegliches Abheben
@@ -246,6 +248,11 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         data->skip_delta = true; // Position des fuehrenden Fingers springt beim Aufsetzen
         if (!first) {
             mxt_drop_cursor(dev); // zweiter Finger: den Anlauf-Ruck nicht abschicken
+            // Ab hier ist es eine Scroll-Geste: Anlauf neu messen, Akku leeren
+            data->scroll_started = false;
+            data->scroll_start_dx = data->scroll_start_dy = 0;
+            data->scroll_start_ms = now;
+            data->scroll_acc_x = data->scroll_acc_y = 0;
         } else {
             data->pend_dx = data->pend_dy = 0;
             data->hold_dx = data->hold_dy = 0;
@@ -263,6 +270,9 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             data->gesture_moved = false;
             data->scroll_acc_x = data->scroll_acc_y = 0;
             data->scroll_last_ms = now;
+            data->scroll_started = false;
+            data->scroll_start_dx = data->scroll_start_dy = 0;
+            data->scroll_start_ms = now;
             data->gesture_dx = data->gesture_dy = 0;
             data->swipe_fired = false;
             data->cursor_started = false;
@@ -358,6 +368,31 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         } else if (idx == lowest && data->gesture_max_fingers <= 2 && (n >= 2 || merged)) {
             data->gesture_dx += dx;
             data->gesture_dy += dy;
+            if (!data->scroll_started) {
+                // Zwei Finger liegen, scrollen aber noch nicht. Ihr Schwerpunkt wandert dabei
+                // langsam; wuerde das in den Scroll-Akku laufen, steht der beim Losscrollen
+                // schon dicht an der Schrittschwelle und der erste Schritt faellt sofort und
+                // an beliebiger Stelle heraus -- genau der Sprung beim Scroll-Beginn.
+                // Erst ein Mindestweg innerhalb eines Zeitfensters startet das Scrollen.
+                if (now - data->scroll_start_ms > MXT_SCROLL_START_MS) {
+                    data->scroll_start_ms = now;
+                    data->scroll_start_dx = data->scroll_start_dy = 0;
+                }
+                data->scroll_start_dx += dx;
+                data->scroll_start_dy += dy;
+                if (mxt_abs16(data->scroll_start_dx) <= MXT_SCROLL_START_MOVE &&
+                    mxt_abs16(data->scroll_start_dy) <= MXT_SCROLL_START_MOVE) {
+                    break;
+                }
+                data->scroll_started = true;
+                // Nur den Weg seit dem Losscrollen uebernehmen, nicht die Drift davor.
+                data->scroll_acc_x = data->scroll_start_dx;
+                data->scroll_acc_y = data->scroll_start_dy;
+                LOG_INF("gesture: scroll start dx=%d dy=%d", data->scroll_start_dx,
+                        data->scroll_start_dy);
+                data->scroll_last_ms = now;
+                break;
+            }
             // Zwei Finger (getrennt oder verschmolzen): Bewegung des ersten Fingers wird zu
             // Scroll-Schritten
             uint32_t dt = now - data->scroll_last_ms;
