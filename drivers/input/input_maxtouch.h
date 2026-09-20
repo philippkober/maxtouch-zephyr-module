@@ -25,8 +25,6 @@ struct mxt_finger {
     uint8_t jump_skip;  // Sprung erkannt: auch die naechste Messung verwerfen
 };
 
-#define MXT_TRACE_LEN 24
-
 struct mxt_data {
     const struct device *dev;
     // Gesten: Tap = Linksklick, 2-Finger-Tap = Rechtsklick, 2 Finger ziehen = Scrollen
@@ -58,15 +56,6 @@ struct mxt_data {
     // verworfen werden, wenn sich nachtraeglich ein zweiter Finger zeigt.
     int16_t hold_dx, hold_dy;
     uint32_t last_report_ms;
-    // Diagnose: die letzten Messungen des fuehrenden Fingers, damit sich beim Auftauchen
-    // eines zweiten Kontakts nachsehen laesst, wie lange und wie stark der Chip den
-    // Schwerpunkt vorher schon verschoben hat.
-    struct mxt_trace {
-        uint32_t ms;
-        int16_t dx, dy;
-        uint8_t ampl, area;
-    } trace[MXT_TRACE_LEN];
-    uint8_t trace_idx;
     struct k_work_delayable click_release_work;
     uint16_t click_button;
     bool irq_mode;      // CHG-Interrupt statt Dauer-Polling

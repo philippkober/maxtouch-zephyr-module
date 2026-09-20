@@ -62,7 +62,7 @@ static inline bool is_t100_report(const struct device *dev, int report_id) {
 #define MXT_MERGED_GROWTH_NUM 3 // Faktor 3/2
 // Naehert sich ein zweiter Finger, verschiebt der Chip den Schwerpunkt des einen gemeldeten
 // Touches sprunghaft, bevor er ihn als eigenen Finger meldet. Die Traces (siehe
-// mxt_dump_trace) zeigen ~22 ms vor dem zweiten Kontakt eine einzelne Messung mit 117 bis
+// den Traces) zeigten ~22 ms vor dem zweiten Kontakt eine einzelne Messung mit 117 bis
 // 239 Counts, waehrend echte Bewegung in denselben Aufzeichnungen nie ueber ~43 Counts
 // hinausgeht. Eine feste Grenze von 150 liess die Haelfte dieser Spruenge durch, deshalb
 // wird stattdessen die Geschwindigkeit begrenzt: 2048 Counts entsprechen 42 mm, also
@@ -209,26 +209,6 @@ static void mxt_flush_cursor(const struct device *dev, bool force) {
 // Ein zweiter Finger ist aufgetaucht: der Chip hat den Schwerpunkt des einen gemeldeten
 // Touches schon Richtung des neuen Fingers gezogen, bevor er ihn als eigenen Kontakt
 // gemeldet hat. Die noch nicht abgeschickte Bewegung ist genau dieser Ruck -> wegwerfen.
-// Diagnose: was hat der Chip gemeldet, bevor er den zweiten Finger als eigenen Kontakt
-// erkannt hat? Zeigt Dauer und Groesse der Schwerpunktwanderung und ob die Kontaktflaeche
-// vorher schon gewachsen ist -- daran liesse sich der zweite Finger frueher erkennen.
-static void mxt_dump_trace(const struct device *dev) {
-    struct mxt_data *data = dev->data;
-    uint32_t now = k_uptime_get_32();
-    LOG_INF("trace vor 2. Finger (ms vor jetzt / dx / dy / ampl / area):");
-    for (uint8_t i = 0; i < MXT_TRACE_LEN; i += 4) {
-        struct mxt_trace *t0 = &data->trace[(data->trace_idx + i) % MXT_TRACE_LEN];
-        struct mxt_trace *t1 = &data->trace[(data->trace_idx + i + 1) % MXT_TRACE_LEN];
-        struct mxt_trace *t2 = &data->trace[(data->trace_idx + i + 2) % MXT_TRACE_LEN];
-        struct mxt_trace *t3 = &data->trace[(data->trace_idx + i + 3) % MXT_TRACE_LEN];
-        LOG_INF("  -%4u %4d %4d %3u %3u | -%4u %4d %4d %3u %3u | -%4u %4d %4d %3u %3u | -%4u %4d "
-                "%4d %3u %3u",
-                now - t0->ms, t0->dx, t0->dy, t0->ampl, t0->area, now - t1->ms, t1->dx, t1->dy,
-                t1->ampl, t1->area, now - t2->ms, t2->dx, t2->dy, t2->ampl, t2->area,
-                now - t3->ms, t3->dx, t3->dy, t3->ampl, t3->area);
-    }
-}
-
 static void mxt_drop_cursor(const struct device *dev) {
     struct mxt_data *data = dev->data;
     if (data->pend_dx || data->pend_dy || data->hold_dx || data->hold_dy) {
@@ -275,7 +255,6 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         f->down_area = area;
         data->skip_delta = true; // Position des fuehrenden Fingers springt beim Aufsetzen
         if (!first) {
-            mxt_dump_trace(dev);
             mxt_drop_cursor(dev); // zweiter Finger: den Anlauf-Ruck nicht abschicken
             // Ab hier ist es eine Scroll-Geste: Anlauf neu messen, Akku leeren
             data->scroll_started = false;
@@ -313,27 +292,20 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
             }
         }
         uint8_t n = __builtin_popcount(data->active_mask) + (merged ? 1 : 0);
-        if (n > data->gesture_max_fingers) {
+        // Waehrend eines Drags bleibt es eine Ein-Finger-Geste: geht der Platz aus, legt man
+        // einen zweiten Finger auf und zieht damit weiter, statt zu scrollen.
+        if (n > data->gesture_max_fingers && !data->dragging) {
             data->gesture_max_fingers = n;
         }
         break;
     }
     case MOVE: {
         int16_t dx = x - f->x, dy = y - f->y;
-        {
-            struct mxt_trace *tr = &data->trace[data->trace_idx];
-            tr->ms = now;
-            tr->dx = dx;
-            tr->dy = dy;
-            tr->ampl = ampl;
-            tr->area = area;
-            data->trace_idx = (data->trace_idx + 1) % MXT_TRACE_LEN;
-        }
         f->x = x;
         f->y = y;
         bool merge_changed = (merged != f->merged);
         f->merged = merged;
-        if (merged && data->gesture_max_fingers < 2) {
+        if (merged && data->gesture_max_fingers < 2 && !data->dragging) {
             data->gesture_max_fingers = 2; // verschmolzene Finger: Scroll-Geste, kein Cursor
             mxt_drop_cursor(dev);
         }
@@ -361,8 +333,10 @@ static void mxt_process_touch(const struct device *dev, uint8_t idx, enum t100_t
         if (mxt_abs16(x - f->down_x) > tap_move || mxt_abs16(y - f->down_y) > tap_move) {
             data->gesture_moved = true;
         }
-        if (data->gesture_max_fingers == 1) {
-            // Reine Ein-Finger-Geste: Cursor.
+        if (data->gesture_max_fingers == 1 && idx == lowest) {
+            // Reine Ein-Finger-Geste: Cursor. Beim Drag koennen mehrere Finger liegen --
+            // den Zeiger fuehrt dann der mit dem niedrigsten Index, und hebt der ab, setzt
+            // skip_delta die Uebernahme durch den naechsten sprungfrei fort.
             if (!data->cursor_started) {
                 // Wie im QMK-Treiber: Bewegung am Anfang verwerfen (nicht sammeln), bis
                 // Wartezeit oder Mindestweg erreicht sind. Kein Sprung beim Start.
